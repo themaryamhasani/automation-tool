@@ -1,0 +1,18 @@
+{
+  "name": "@automation-tool/runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node --watch src/main.cjs",
+    "start": "node src/main.cjs",
+    "build": "node --check src/main.cjs && node --check src/tools.cjs && node --check src/process.cjs && node --check src/is-reports.cjs && node --check src/local-reports.cjs && node --check src/cde-runtime.cjs && node --check ../../shared/snapshot-crypto.cjs",
+    "typecheck": "npm run build"
+  },
+  "dependencies": {
+    "@playwright/test": "1.55.1",
+    "dotenv": "^17.2.1",
+    "jszip": "^3.10.1",
+    "pg": "^8.16.3"
+  }
+}

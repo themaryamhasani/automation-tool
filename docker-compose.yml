@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-automation-tool}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - automation_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-automation-tool}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-1234}@postgres:5432/${POSTGRES_DB:-automation-tool}?schema=public
+      API_PORT: 4280
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+      CDE_ORIGIN: ${CDE_ORIGIN:-https://cde.edus.ir}
+      CDE_SESSION_TTL_SECONDS: ${CDE_SESSION_TTL_SECONDS:-43200}
+      CDE_SESSION_ENCRYPTION_KEY: ${CDE_SESSION_ENCRYPTION_KEY}
+      CDE_REQUEST_TIMEOUT_MS: ${CDE_REQUEST_TIMEOUT_MS:-60000}
+      CDE_MAX_BODY_BYTES: ${CDE_MAX_BODY_BYTES:-33554432}
+      CDE_SNAPSHOT_MAX_BYTES: ${CDE_SNAPSHOT_MAX_BYTES:-67108864}
+      ARTIFACT_ROOT: /app/artifacts/playwright
+      IS_ROOT: ${IS_ROOT:-}
+      GIT_EDUS_ORIGIN: ${GIT_EDUS_ORIGIN:-https://git.edus.ir}
+      GITHUB_API_ORIGIN: ${GITHUB_API_ORIGIN:-https://api.github.com}
+    ports:
+      - "${API_PORT:-4280}:4280"
+    volumes:
+      - automation_artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4280/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  runner:
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-1234}@postgres:5432/${POSTGRES_DB:-automation-tool}?schema=public
+      RUNNER_ID: ${RUNNER_ID:-automation-runner-docker}
+      RUNNER_POLL_INTERVAL_MS: ${RUNNER_POLL_INTERVAL_MS:-1500}
+      RUNNER_CONCURRENCY: ${RUNNER_CONCURRENCY:-1}
+      CDE_SESSION_ENCRYPTION_KEY: ${CDE_SESSION_ENCRYPTION_KEY}
+      ARTIFACT_ROOT: /app/artifacts/playwright
+      RUN_WORK_ROOT: /app/runtime/runs
+      IS_ROOT: ${IS_ROOT:-}
+      GIT_EDUS_ORIGIN: ${GIT_EDUS_ORIGIN:-https://git.edus.ir}
+      GITHUB_API_ORIGIN: ${GITHUB_API_ORIGIN:-https://api.github.com}
+    volumes:
+      - automation_artifacts:/app/artifacts
+      - automation_runtime:/app/runtime
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "${WEB_PORT:-5180}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  automation_postgres_data:
+  automation_artifacts:
+  automation_runtime:

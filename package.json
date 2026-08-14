@@ -1,0 +1,39 @@
+{
+  "name": "automation-tool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone Playwright automation management platform",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web,runner -c blue,cyan,magenta \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:runner\"",
+    "dev:web": "npm run dev -w @automation-tool/web",
+    "dev:api": "npm run dev -w @automation-tool/api",
+    "dev:runner": "npm run dev -w @automation-tool/runner",
+    "start:api": "npm run start -w @automation-tool/api",
+    "start:runner": "npm run start -w @automation-tool/runner",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint apps/web/src apps/api/src apps/runner/src shared tests scripts",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "node scripts/ci-ui.cjs",
+    "db:setup": "node scripts/db-setup.cjs",
+    "db:seed": "node scripts/db-seed.cjs",
+    "db:import": "node scripts/import-existing-data.cjs",
+    "verify": "npm run lint && npm run typecheck && npm run build && npm test"
+  },
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "dotenv": "^17.2.1",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@playwright/test": "1.55.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.33.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "typescript-eslint": "^8.40.0"
+  }
+}

@@ -1,0 +1,24 @@
+---
+description: Keep architecture, code, performance, security, tests, and UX at the highest bar on every change
+alwaysApply: true
+---
+
+# Quality bar (always)
+
+Every request — feature, fix, or refactor — must leave these at 10, without being asked:
+
+- **Tests**: add or update `tests/*.test.cjs` (and UI smoke in `scripts/ui-check.spec.cjs` if the screen or login/run path changes). Architecture contracts in `tests/architecture.test.cjs` stay green. Do not wait for “write the test too.”
+- **Architecture**: no new god files; extend `create-run`, `runs/routes`, `http.cjs`, approach modules — do not dump REST back into `server.cjs`. One create-run path.
+- **Code**: no dead files, no unused exports, ESLint on api/runner/shared/web stays clean. Delete obsolete UI instead of leaving a second workspace.
+- **Performance**: no `SELECT r.*` / fat `SELECT *` on list/claim/cancel; no unbounded in-memory logs; hot request FS stays async; live UI uses SSE not a tight poll.
+- **Security**: sessions HttpOnly; Secure in production; never weaken auth, path checks, or encryption-key rules for convenience.
+- **UX**: RTL Persian copy, real headings, disk logs in the report panel, login and run must work on HTTP localhost.
+
+After the change, run the relevant tests (at least `npm test` when API/shared/runner/web contracts moved). Login and run must stay error-free.
+
+```cjs
+// ❌ BAD — feature without a test
+app.post('/api/widgets', ...);
+
+// ✅ GOOD — same change includes tests/widgets.test.cjs (or an architecture assertion)
+```
