@@ -6,7 +6,7 @@ import type { Run, SourceStatus, ToolKind } from '../types';
 import { FilePreview } from './PrettyDocument';
 import {
   CreateFileDialog, CreateFolderDialog, FileTree, SplitPane, StudioReportDock, TOOLS,
-  inferTool, runMismatch, type DirEntry, type OpenFile,
+  inferTool, runMismatch, selectedToolKind, type DirEntry, type OpenFile,
 } from './studio';
 import { Button, EmptyState, Loading, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
@@ -35,6 +35,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
   const [tool, setTool] = useState<ToolKind>('PLAYWRIGHT');
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<Run | null>(null);
+  const [treeEpoch, setTreeEpoch] = useState(0);
   fileRef.current = file;
   const dirty = Boolean(file && file.code !== file.original);
   const defaultFolder = file?.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
@@ -120,7 +121,10 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
       });
       setShowCreate(false);
       setFile({ path: saved.path, name: saved.name, code: saved.code, original: saved.code });
+      const inferred = inferTool(saved.path);
+      if (inferred) setTool(inferred);
       await loadTree();
+      setTreeEpoch(value => value + 1);
       notify('فایل جدید ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد فایل ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -133,6 +137,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
       await api(`/api/projects/${projectId}/zip/dir`, { method: 'POST', body: JSON.stringify({ path: folder }) });
       setShowFolder(false);
       await loadTree();
+      setTreeEpoch(value => value + 1);
       notify('پوشه ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد پوشه ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -146,6 +151,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
       await api(`/api/projects/${projectId}/zip/entry?path=${encodeURIComponent(entry.path)}`, { method: 'DELETE' });
       if (file && isUnder(entry.path, file.path)) setFile(null);
       await loadTree();
+      setTreeEpoch(value => value + 1);
       notify('حذف شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'حذف ناموفق بود.', 'error'); }
   }
@@ -153,7 +159,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
   async function runTool() {
     const mismatch = runMismatch(tool, file?.path);
     if (mismatch) { notify(mismatch, 'error'); return; }
-    const toolKind = inferTool(file?.path) || tool;
+    const toolKind = selectedToolKind(tool, file?.path);
     setRunning(true);
     try {
       const created = await api<Run>('/api/workspace/runs', {
@@ -202,7 +208,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-36 bg-slate-900 py-1.5 text-xs text-slate-100">
+        <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-44 bg-slate-900 py-1.5 text-xs text-slate-100">
           {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
         </Select>
         <Button size="sm" loading={running} disabled={!ready} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>اجرا</Button>
@@ -216,6 +222,7 @@ export function ZipWorkspace({ projectId, onStatusChange }: { projectId?: string
     {extracting ? <Loading text="در حال استخراج…" /> : boot ? <Loading text="در حال خواندن آرشیو…" /> : !ready ? <EmptyState text="یک فایل zip انتخاب کنید." /> : (
       <SplitPane orientation="horizontal" initial={280} min={180} max={480} storageKey="zip-tree-width">
         <FileTree
+          key={treeEpoch}
           entries={tree}
           selectedPath={file?.path}
           query={query}

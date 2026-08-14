@@ -9,7 +9,9 @@ const { writeLocalTaxonomy } = require('./local-reports.cjs');
 const gitClient = require('../../api/src/approaches/git/client.cjs');
 const { projectZipRoot } = require('../../api/src/approaches/zip/service.cjs');
 const localPack = require('../../api/src/approaches/local-pack.cjs');
-const { materializeExpressRuntime, loadSnapshotFiles } = require('./cde-runtime.cjs');
+const { materializeExpressRuntime, loadSnapshotFiles, writeSnapshotTree } = require('./cde-runtime.cjs');
+const { isStaticTool } = require('../../api/src/approaches/constants.cjs');
+const { axeJob, runQualityTool } = require('./quality-tools.cjs');
 
 function snapshotOf(run) {
   try { return JSON.parse(run.source_snapshot || '{}'); }
@@ -122,6 +124,44 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
     command = job.command;
     args = job.args;
     env = envWithDotEnv(cwd);
+  } else if (run.tool_kind === 'AXE') {
+    const job = axeJob({ workspace, baseURL: pack.e2eBaseUrl, headed: Boolean(run.headed) });
+    command = job.command;
+    args = job.args;
+    cwd = job.cwd;
+    jsonFile = job.jsonFile;
+    env = { ...envWithDotEnv(paths.e2eCwd), ...job.envExtra, E2E_BASE_URL: pack.e2eBaseUrl };
+  } else if (isStaticTool(run.tool_kind)) {
+    const quality = await runQualityTool({
+      toolKind: run.tool_kind,
+      scanRoots: [paths.productRoot, paths.unitCwd].filter(item => item && fs.existsSync(item)),
+      cwd: paths.productRoot,
+      timeout,
+      shouldCancel,
+      onLog,
+      env: envWithDotEnv(paths.productRoot),
+    });
+    const reports = await persistIsReports({
+      packId: pack.id,
+      toolKind: run.tool_kind,
+      flowId: run.flow_id,
+      code: quality.code,
+      out: quality.out,
+    });
+    return {
+      exitCode: quality.code,
+      logs: quality.out,
+      summary: {
+        total: reports.stats.total,
+        passed: reports.stats.pass,
+        failed: reports.stats.fail,
+        skipped: reports.stats.skip,
+        details: reports.stats.details || [],
+      },
+      reportFiles: [reports.raw?.target].filter(Boolean),
+      reportPaths: { product: `test/doc/${pack.docPath}/reports` },
+      command: [run.tool_kind],
+    };
   } else {
     throw new Error(`Unsupported IS tool: ${run.tool_kind}`);
   }
@@ -275,6 +315,27 @@ async function executeSourceToolRun(run, { shouldCancel, pool, workspace, onLog 
   let command;
   let args;
   const env = mergeDotEnv({ ...process.env, FORCE_COLOR: '0' }, sourceRoot);
+  if (isStaticTool(run.tool_kind)) {
+    const quality = await runQualityTool({
+      toolKind: run.tool_kind,
+      scanRoots: [sourceRoot],
+      cwd: sourceRoot,
+      timeout,
+      shouldCancel,
+      onLog,
+      env,
+    });
+    return finishSource(run, { code: quality.code, out: quality.out }, [run.tool_kind]);
+  }
+  if (run.tool_kind === 'AXE') {
+    const job = axeJob({
+      workspace,
+      baseURL: process.env.UTMS_WEB_BASE_URL || process.env.E2E_BASE_URL || 'http://127.0.0.1:5173',
+      headed: Boolean(run.headed),
+    });
+    Object.assign(env, job.envExtra);
+    return finishSource(run, await runProcess(job.command, job.args, job.cwd, env, timeout, shouldCancel, onLog), [job.command, ...job.args], job.jsonFile);
+  }
   if (run.tool_kind === 'K6') {
     const k6 = resolveBin('k6');
     command = k6.command;
@@ -385,8 +446,41 @@ async function materializeCdeScript(run, pack, pool, workspace, selected) {
 async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog }) {
   const projectKey = run.pack_id || run.cde_project_key;
   const pack = localPack.ensurePack('CDE', projectKey, { title: projectKey });
+  if (isStaticTool(run.tool_kind)) {
+    const scanRoots = [pack.root];
+    if (run.cde_snapshot_id) {
+      const dest = path.join(workspace, 'cde-source');
+      await writeSnapshotTree(pool, run.cde_snapshot_id, dest);
+      scanRoots.push(dest);
+    }
+    const timeout = Math.max(Number(run.timeout_seconds || 180), 300);
+    const quality = await runQualityTool({
+      toolKind: run.tool_kind,
+      scanRoots,
+      cwd: pack.root,
+      timeout,
+      shouldCancel,
+      onLog,
+      env: { ...process.env, FORCE_COLOR: '0', CI: '1' },
+    });
+    const stats = parseSummary(quality.out);
+    const saved = writeLocalTaxonomy(run, {
+      code: quality.code,
+      out: quality.out,
+      stats,
+      title: `CDE ${projectKey}`,
+    });
+    return {
+      exitCode: quality.code,
+      logs: quality.out,
+      summary: { total: stats.total, passed: stats.pass, failed: stats.fail, skipped: stats.skip, details: stats.details || [] },
+      command: [run.tool_kind],
+      reportFiles: [saved.board, saved.raw].filter(item => item && fs.existsSync(item)),
+      reportPaths: { product: saved.product, board: saved.board },
+    };
+  }
   const built = await materializeExpressRuntime(pool, run);
-  const timeout = Math.max(Number(run.timeout_seconds || 180), run.tool_kind === 'PLAYWRIGHT' ? 900 : 180);
+  const timeout = Math.max(Number(run.timeout_seconds || 180), run.tool_kind === 'PLAYWRIGHT' || run.tool_kind === 'AXE' ? 900 : 180);
   const env = {
     ...process.env,
     FORCE_COLOR: '0',
@@ -432,6 +526,12 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
       cwd = path.dirname(script);
       command = process.execPath;
       args = ['--test', script];
+    } else if (run.tool_kind === 'AXE') {
+      const job = axeJob({ workspace, baseURL: built.baseUrl, headed: Boolean(run.headed) });
+      command = job.command;
+      args = job.args;
+      cwd = job.cwd;
+      Object.assign(env, job.envExtra);
     } else {
       const spec = resolved && fs.existsSync(resolved)
         ? resolved

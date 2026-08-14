@@ -7,10 +7,11 @@ import type { AuditLog, Paginated } from '../types';
 
 const actionLabels: Record<string, string> = {
   AUTH_LOGIN: 'ورود به سامانه', AUTH_LOGOUT: 'خروج از سامانه', AUTH_PASSWORD_CHANGED: 'تغییر رمز عبور',
-  USER_CREATED: 'ایجاد کاربر', USER_UPDATED: 'ویرایش کاربر', PROJECT_CREATED: 'ایجاد پروژه', PROJECT_UPDATED: 'ویرایش پروژه',
+  USER_CREATED: 'ایجاد کاربر', USER_UPDATED: 'ویرایش کاربر', PROJECT_CREATED: 'ایجاد پروژه', PROJECT_UPDATED: 'ویرایش پروژه', PROJECT_DELETED: 'حذف پروژه', PROJECT_ARCHIVED: 'بایگانی پروژه',
   ENVIRONMENT_CREATED: 'ایجاد محیط', ENVIRONMENT_UPDATED: 'ویرایش محیط', ENVIRONMENT_DELETED: 'حذف محیط',
   TEST_FILE_CREATED: 'ایجاد فایل تست', TEST_FILE_UPDATED: 'ویرایش فایل تست', TEST_FILE_DELETED: 'حذف فایل تست',
   RUN_QUEUED: 'ثبت اجرای جدید', RUN_CANCEL_REQUESTED: 'درخواست لغو اجرا', RUN_COMPLETED: 'پایان اجرا', RUN_IMPORTED: 'انتقال اجرای قبلی',
+  REPORT_EXPORTED: 'خروجی اکسل گزارش',
 };
 
 export function AuditPage() {

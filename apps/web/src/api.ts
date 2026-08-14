@@ -100,6 +100,23 @@ export async function downloadArtifact(id: string, fileName: string) {
     throw new Error(payload?.message || 'دانلود فایل ناموفق بود.');
   }
   const blob = await response.blob();
+  triggerDownload(blob, fileName);
+}
+
+export async function downloadReportExcel(reportId: string, query: URLSearchParams, fileName: string) {
+  const headers = withAuth(new Headers());
+  const response = await fetch(`${API_BASE}/api/reports/${encodeURIComponent(reportId)}/excel?${query}`, {
+    headers,
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.message || 'دانلود اکسل ناموفق بود.');
+  }
+  triggerDownload(await response.blob(), fileName);
+}
+
+function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

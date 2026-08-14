@@ -27,17 +27,42 @@ export const TOOLS: Array<{ id: ToolKind; label: string }> = [
   { id: 'K6', label: 'k6' },
   { id: 'PLAYWRIGHT', label: 'Playwright + Chrome' },
   { id: 'VITEST', label: 'Vitest' },
+  { id: 'BIOME', label: 'Biome' },
+  { id: 'GITLEAKS', label: 'gitleaks' },
+  { id: 'AUDIT', label: 'SCA / npm audit' },
+  { id: 'SEMGREP', label: 'Semgrep' },
+  { id: 'SPECTRAL', label: 'Spectral' },
+  { id: 'AXE', label: 'axe-core' },
 ];
+
+export const STATIC_TOOL_IDS: ToolKind[] = ['BIOME', 'GITLEAKS', 'AUDIT', 'SEMGREP', 'SPECTRAL'];
+
+export function needsLiveRuntime(tool: ToolKind) {
+  return tool === 'DANGER' || tool === 'K6' || tool === 'PLAYWRIGHT' || tool === 'AXE';
+}
+
+export function ignoresOpenFile(tool: ToolKind) {
+  return STATIC_TOOL_IDS.includes(tool) || tool === 'AXE';
+}
 
 export function inferTool(filePath?: string | null): ToolKind | null {
   if (!filePath) return null;
   const path = filePath.replace(/\\/g, '/');
   const name = path.split('/').pop() || '';
+  if (/biome\.json$/i.test(name)) return 'BIOME';
+  if (/gitleaks/i.test(name)) return 'GITLEAKS';
+  if (/openapi|swagger/i.test(name) && /\.(ya?ml|json)$/i.test(name)) return 'SPECTRAL';
+  if (/a11y|axe/i.test(name)) return 'AXE';
   if (/\.(spec|test)\.(ts|js)$/i.test(name)) return 'PLAYWRIGHT';
   if (/k6/i.test(name) && /\.js$/i.test(name)) return 'K6';
   if (/\.test\.(cjs|mjs|ts|js)$/i.test(name) || /\/vitest\//i.test(path)) return 'VITEST';
   if (/\.mjs$/i.test(name) || /run-by-flow/i.test(name) || /danger/i.test(path)) return 'DANGER';
   return null;
+}
+
+export function selectedToolKind(tool: ToolKind, filePath?: string | null): ToolKind {
+  if (ignoresOpenFile(tool)) return tool;
+  return inferTool(filePath) || tool;
 }
 
 export function toolLabel(kind: ToolKind) {
@@ -52,22 +77,31 @@ export function isPathUnder(parent: string, child: string) {
 }
 
 export function runMismatch(tool: ToolKind, filePath?: string | null): string | null {
+  if (ignoresOpenFile(tool)) return null;
   const inferred = inferTool(filePath);
   if (!inferred || inferred === tool) return null;
   return `این فایل با «${toolLabel(inferred)}» اجرا می‌شود، نه «${toolLabel(tool)}». ابزار را عوض کنید یا فایل مناسب انتخاب کنید.`;
 }
 
-export type ArtifactKind = 'playwright' | 'k6' | 'danger' | 'unit' | 'flow' | 'case' | 'doc';
+export type ArtifactKind = 'playwright' | 'k6' | 'danger' | 'unit' | 'openapi' | 'custom' | 'flow' | 'case' | 'doc';
 
 const ARTIFACTS: Array<{ id: ArtifactKind; label: string; hint: string; ext: string; folder: string; name: string }> = [
   { id: 'playwright', label: 'Playwright', hint: 'تست مرورگر', ext: '.spec.ts', folder: 'scripts/e2e', name: 'scenario' },
   { id: 'k6', label: 'k6', hint: 'بار و HTTP', ext: '.js', folder: 'scripts', name: 'k6' },
   { id: 'danger', label: 'Danger', hint: 'سوئیت API', ext: '.mjs', folder: 'scripts/api', name: 'run' },
   { id: 'unit', label: 'Unit', hint: 'تست واحد Vitest', ext: '.test.cjs', folder: 'scripts/vitest', name: 'runtime' },
+  { id: 'openapi', label: 'OpenAPI', hint: 'قرارداد Spectral', ext: '.yaml', folder: 'scripts', name: 'openapi' },
+  { id: 'custom', label: 'سفارشی', hint: 'نام و پسوند دلخواه', ext: '.mjs', folder: 'scripts', name: 'script' },
   { id: 'flow', label: 'فلو', hint: 'جریان کسب‌وکار', ext: '.md', folder: 'flows', name: 'FLOW-NEW' },
   { id: 'case', label: 'کیس', hint: 'سناریوی دستی', ext: '.md', folder: 'cases', name: 'TC-001' },
   { id: 'doc', label: 'سند', hint: 'Markdown', ext: '.md', folder: '', name: 'note' },
 ];
+
+function artifactFileName(kind: ArtifactKind, name: string, ext: string) {
+  const raw = String(name || '').trim() || 'script';
+  if (kind === 'custom') return raw.includes('.') ? raw : `${raw}${ext}`;
+  return raw.endsWith(ext) ? raw : `${raw.replace(/\.[^.]+$/, '')}${ext}`;
+}
 
 export function scriptTemplate(fileName: string) {
   if (fileName.endsWith('.spec.ts') || fileName.endsWith('.spec.js') || fileName.endsWith('.test.ts')) {
@@ -111,6 +145,20 @@ const assert = require('node:assert/strict');
 test('runtime is reachable', () => {
   assert.ok(true);
 });
+`;
+  }
+  if (/openapi|swagger/i.test(fileName) && /\.(ya?ml|json)$/i.test(fileName)) {
+    return `openapi: 3.0.3
+info:
+  title: API
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      summary: Health
+      responses:
+        '200':
+          description: ok
 `;
   }
   if (/^FLOW[-_]/i.test(fileName) || fileName.includes('flow')) {
@@ -502,7 +550,7 @@ export function CreateFileDialog({
   onCreate: (folder: string, fileName: string, source: string) => void;
 }) {
   const allowed = ARTIFACTS.filter(item => {
-    if (section === 'scripts') return ['playwright', 'k6', 'danger', 'unit'].includes(item.id);
+    if (section === 'scripts') return ['playwright', 'k6', 'danger', 'unit', 'openapi', 'custom'].includes(item.id);
     if (section === 'flows') return item.id === 'flow';
     if (section === 'cases') return item.id === 'case';
     return ['doc', 'flow', 'case'].includes(item.id);
@@ -510,21 +558,23 @@ export function CreateFileDialog({
   const [kind, setKind] = useState<ArtifactKind>(allowed[0]?.id || 'playwright');
   const [folder, setFolder] = useState(defaultFolder);
   const [name, setName] = useState(allowed[0]?.name || 'scenario');
+  const [source, setSource] = useState('');
   const artifact = ARTIFACTS.find(item => item.id === kind) || ARTIFACTS[0];
-  const fileName = name.endsWith(artifact.ext) ? name : `${name.replace(/\.[^.]+$/, '')}${artifact.ext}`;
-  const preview = scriptTemplate(fileName);
+  const fileName = artifactFileName(kind, name, artifact.ext);
+
+  function applyArtifact(item: (typeof ARTIFACTS)[number]) {
+    const nextName = item.name;
+    const nextFile = artifactFileName(item.id, nextName, item.ext);
+    setKind(item.id);
+    setName(nextName);
+    setFolder(folderFor(defaultFolder, item.folder));
+    setSource(scriptTemplate(nextFile));
+  }
 
   useEffect(() => {
     if (!open) return;
-    const next = allowed[0] || ARTIFACTS[0];
-    setKind(next.id);
-    setName(next.name);
-    setFolder(folderFor(defaultFolder, next.folder));
+    applyArtifact(allowed[0] || ARTIFACTS[0]);
   }, [open, section, defaultFolder]);
-
-  useEffect(() => {
-    setFolder(folderFor(defaultFolder, artifact.folder));
-  }, [kind, defaultFolder, artifact.folder]);
 
   return (
     <Modal
@@ -532,17 +582,17 @@ export function CreateFileDialog({
       onClose={onClose}
       title="ایجاد فایل"
       size="lg"
-      footer={<><Button variant="secondary" onClick={onClose}>انصراف</Button><Button loading={saving} onClick={() => onCreate(folder, fileName, preview)}>ایجاد</Button></>}
+      footer={<><Button variant="secondary" onClick={onClose}>انصراف</Button><Button loading={saving} disabled={!name.trim() || !source.trim()} onClick={() => onCreate(folder, fileName, source)}>ایجاد</Button></>}
     >
       <div className="space-y-4">
         <div>
           <p className="mb-2 text-sm font-medium text-gray-700">نوع فایل</p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {allowed.map(item => (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => { setKind(item.id); setName(item.name); setFolder(folderFor(defaultFolder, item.folder)); }}
+                onClick={() => applyArtifact(item)}
                 className={cn('rounded-xl border px-3 py-2.5 text-right transition', kind === item.id ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-100')}
               >
                 <p className="text-sm font-semibold text-gray-900">{item.label}</p>
@@ -557,11 +607,11 @@ export function CreateFileDialog({
         </div>
         <div>
           <div className="mb-2 flex items-center justify-between text-[11px] text-gray-500">
-            <span>پیش‌نمایش قالب</span>
+            <span>متن فایل — قابل ویرایش</span>
             <code dir="ltr" className="text-slate-400">{folder}/{fileName}</code>
           </div>
           <div className="h-56 overflow-hidden rounded-xl border border-gray-200">
-            <CodeEditor value={preview} readOnly path={fileName} />
+            <CodeEditor value={source} onChange={setSource} path={fileName} />
           </div>
         </div>
       </div>

@@ -7,7 +7,7 @@ import { CdeWorkspace } from './CdeWorkspace';
 import { FilePreview } from './PrettyDocument';
 import {
   CreateFileDialog, CreateFolderDialog, EditorPane, FileTree, StudioChrome, StudioTabs, TOOLS,
-  inferTool, isPathUnder, runMismatch, type DirEntry, type OpenFile, type SectionId,
+  inferTool, isPathUnder, needsLiveRuntime, runMismatch, selectedToolKind, type DirEntry, type OpenFile, type SectionId,
 } from './studio';
 import { Badge, Button, EmptyState, Loading, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
@@ -99,6 +99,7 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
   const [showFolder, setShowFolder] = useState(false);
   const [lastRun, setLastRun] = useState<Run | null>(null);
   const [loadedTreeQuery, setLoadedTreeQuery] = useState('');
+  const [treeEpoch, setTreeEpoch] = useState(0);
   fileRef.current = file;
   const currentSection = SECTIONS.find(item => item.id === section) || SECTIONS[0];
   const dirty = Boolean(file && file.code !== file.original);
@@ -204,7 +205,11 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
       });
       setShowCreate(false);
       setFile({ path: saved.path, name: saved.name, code: saved.code, original: saved.code });
+      const inferred = inferTool(saved.path);
+      if (inferred) setTool(inferred);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       if (section === 'flows') await refreshFlows();
       notify('فایل در automation-tool ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد فایل ناموفق بود.', 'error'); }
@@ -218,6 +223,8 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
       await api(`${packBase}/dir`, { method: 'POST', body: JSON.stringify({ path: folder }) });
       setShowFolder(false);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       notify('پوشه در بسته محلی ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد پوشه ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -231,6 +238,8 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
       await api(`${packBase}/entry?path=${encodeURIComponent(entry.path)}`, { method: 'DELETE' });
       if (file && isPathUnder(entry.path, file.path)) setFile(null);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       if (section === 'flows') await refreshFlows();
       notify('از بسته محلی حذف شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'حذف ناموفق بود.', 'error'); }
@@ -240,7 +249,7 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
     if (!projectKey) return;
     const mismatch = runMismatch(tool, file?.path);
     if (mismatch) { notify(mismatch, 'error'); return; }
-    const toolKind = inferTool(file?.path) || tool;
+    const toolKind = selectedToolKind(tool, file?.path);
     setRunning(true);
     try {
       const created = await api<Run>('/api/workspace/runs', {
@@ -296,13 +305,13 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
     toolbar={section !== 'source' && section !== 'reports' && projectKey ? (
       section === 'scripts'
         ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
-          <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-40 bg-slate-900 text-slate-100">
+          <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
             {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
           </Select>
           {tool === 'DANGER' && <Select value={flowId} onChange={event => setFlowId(event.target.value)} className="min-w-28 bg-slate-900 text-slate-100">
             {flows.map(flow => <option key={flow} value={flow}>{flow}</option>)}
           </Select>}
-          <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>اجرا روی رانتایم Express</Button>
+          <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>{needsLiveRuntime(tool) ? 'اجرا روی رانتایم Express' : 'اسکن استاتیک'}</Button>
           {canWrite && <Button size="sm" variant="secondary" loading={saving} disabled={!dirty || /^cde-(tests|db-tests|snapshot)\//.test(file?.path || '')} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>}
         </div>
         : (canWrite ? <div className="flex justify-end border-b border-slate-800 bg-slate-950/80 px-3 py-2">
@@ -310,6 +319,7 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
         </div> : undefined)
     ) : undefined}
     tree={<FileTree
+      key={`${treeQuery}:${treeEpoch}`}
       entries={root}
       selectedPath={file?.path}
       query={query}

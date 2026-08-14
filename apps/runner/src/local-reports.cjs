@@ -7,6 +7,12 @@ const TOOL_META = {
   K6: { key: 'k6', label: 'k6', raw: 'k6-raw.txt' },
   PLAYWRIGHT: { key: 'e2e', label: 'Playwright', raw: 'e2e-raw.txt' },
   VITEST: { key: 'unit', label: 'Unit', raw: 'unit-raw.txt' },
+  BIOME: { key: 'biome', label: 'Biome', raw: 'biome-raw.txt' },
+  GITLEAKS: { key: 'gitleaks', label: 'gitleaks', raw: 'gitleaks-raw.txt' },
+  AUDIT: { key: 'audit', label: 'SCA / npm audit', raw: 'audit-raw.txt' },
+  SEMGREP: { key: 'semgrep', label: 'Semgrep', raw: 'semgrep-raw.txt' },
+  SPECTRAL: { key: 'spectral', label: 'Spectral', raw: 'spectral-raw.txt' },
+  AXE: { key: 'axe', label: 'axe-core', raw: 'axe-raw.txt' },
 };
 
 function reportsRoot() {
@@ -225,7 +231,7 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
 |-------------|------|
 | [01-status-board.md](01-status-board.md) | **الان** وضعیت چیست؟ (نقطهٔ ورود روزانه) |
 | [by-flow/](by-flow/_index.md) | جزئیات هر FLOW |
-| [by-tool/](by-tool/_index.md) | نتیجه به تفکیک danger / k6 / e2e / unit |
+| [by-tool/](by-tool/_index.md) | نتیجه به تفکیک ابزار |
 | [history/](history/) | آرشیو زمانی تخته وضعیت |
 
 ## قرارداد وضعیت
@@ -248,10 +254,7 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
 
 | ابزار | فایل |
 |--------|------|
-| \`danger\` | [danger.md](danger.md) |
-| \`k6\` | [k6.md](k6.md) |
-| \`e2e\` | [e2e.md](e2e.md) |
-| \`unit\` | [unit.md](unit.md) |
+${Object.values(TOOL_META).map(meta => `| \`${meta.key}\` | [${meta.key}.md](${meta.key}.md) |`).join('\n')}
 `, 'utf8');
 
   const tools = Object.values(TOOL_META).map(meta => {

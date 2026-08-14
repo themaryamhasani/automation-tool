@@ -20,6 +20,14 @@
 - **k6** — اسکریپت‌های `k6-*-security-perf.js` (باید `k6` روی PATH باشد)
 - **Playwright + Chrome** — harness داخل `scripts/e2e` با `PW_CHANNEL=chrome`
 - **Vitest** — unit همان سرویس محصول (بدون ویرایش `services/`)
+- **Biome** — lint استاتیک سریع (باینری داخل Runner)
+- **gitleaks** — نشت secret؛ باید `gitleaks` روی PATH باشد
+- **SCA / npm audit** — CVE وابستگی‌ها؛ در صورت وجود `osv-scanner` و `trivy` همان اجرا آن‌ها را هم صدا می‌زند
+- **Semgrep** — SAST؛ باید `semgrep` روی PATH باشد
+- **Spectral** — lint قرارداد OpenAPI (`openapi.yaml` / `swagger.json`)
+- **axe-core** — دسترسی‌پذیری WCAG روی UI زنده با همان Playwright
+
+ابزارهای استاتیک (Biome، gitleaks، audit، Semgrep، Spectral) بدون بالا بودن runtime اجرا می‌شوند. k6، gitleaks و Semgrep مثل هم روی PATH نصب می‌شوند؛ Biome و Spectral و axe همراه Runner هستند.
 
 برای IS، بعد از هر اجرا فایل raw ابزار و در صورت danger گزارش فلو طبق قرارداد موجود در `test/doc` ذخیره می‌شود.
 

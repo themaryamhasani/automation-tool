@@ -11,7 +11,7 @@ class LocalPackError extends Error {
   }
 }
 
-const TEXT_EXT = new Set(['.md', '.mjs', '.js', '.cjs', '.ts', '.tsx', '.json', '.txt', '.ps1', '.yml', '.yaml', '.css', '.html']);
+const TEXT_EXT = new Set(['.md', '.mjs', '.js', '.cjs', '.ts', '.tsx', '.json', '.txt', '.ps1', '.yml', '.yaml', '.css', '.html', '.toml']);
 const FOLDERS = ['scripts/api', 'scripts/e2e', 'scripts/unit', 'scripts/vitest', 'reports/by-flow/raw', 'reports/by-tool', 'reports/history', 'flows', 'cases', 'runbooks', 'checklists'];
 
 function packsRoot() {
@@ -98,6 +98,33 @@ test('CDE express package has a runtime manifest', () => {
   assert.equal(fs.existsSync(path.join(appRoot, 'server.cjs')), true);
 });
 `;
+  const openapi = `openapi: 3.0.3
+info:
+  title: ${key} runtime
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      summary: Health
+      responses:
+        '200':
+          description: ok
+`;
+  const biome = `{
+  "files": { "ignore": ["node_modules", "dist", "coverage", "reports"] },
+  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "formatter": { "enabled": false },
+  "organizeImports": { "enabled": false }
+}
+`;
+  const spectral = `extends:
+  - spectral:oas
+rules:
+  info-contact: off
+  info-description: off
+  operation-operationId: off
+  operation-tags: off
+`;
   const writeIfMissing = (rel, code) => {
     const target = path.join(root, rel);
     if (fs.existsSync(target)) return;
@@ -112,6 +139,9 @@ test('CDE express package has a runtime manifest', () => {
   writeIfMissing('scripts/k6.js', k6);
   writeIfMissing('scripts/unit/runtime.test.cjs', unit);
   writeIfMissing('scripts/vitest/runtime.test.cjs', unit);
+  writeIfMissing('scripts/openapi.yaml', openapi);
+  writeIfMissing('biome.json', biome);
+  writeIfMissing('.spectral.yaml', spectral);
   writeIfMissing('00-readme.md', `# بسته تست ${key}
 
 اسکریپت‌ها اینجا نوشته می‌شوند؛ سورس CDE دست نمی‌خورد.
@@ -133,7 +163,7 @@ test('CDE express package has a runtime manifest', () => {
 |-------------|------|
 | [01-status-board.md](01-status-board.md) | **الان** وضعیت چیست؟ |
 | [by-flow/](by-flow/_index.md) | جزئیات هر FLOW |
-| [by-tool/](by-tool/_index.md) | danger / k6 / e2e / unit |
+| [by-tool/](by-tool/_index.md) | danger / k6 / e2e / unit / biome / gitleaks / audit / semgrep / spectral / axe |
 | [history/](history/) | آرشیو زمانی |
 `);
 }
@@ -181,6 +211,12 @@ function describePack(approach, key) {
       K6: { cwd: 'scripts', script: 'k6.js' },
       PLAYWRIGHT: { cwd: 'scripts/e2e' },
       VITEST: { cwd: 'scripts/vitest' },
+      BIOME: { cwd: '.', config: 'biome.json' },
+      GITLEAKS: { cwd: '.' },
+      AUDIT: { cwd: '.' },
+      SEMGREP: { cwd: '.' },
+      SPECTRAL: { cwd: 'scripts', spec: 'openapi.yaml' },
+      AXE: { cwd: 'scripts/e2e' },
     },
     reportLayout: {
       readme: 'reports/00-readme.md',

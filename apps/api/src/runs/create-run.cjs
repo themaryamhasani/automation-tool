@@ -1,5 +1,6 @@
 const path = require('node:path');
-const { isTool } = require('../approaches/constants.cjs');
+const { isTool, needsLiveRuntime } = require('../approaches/constants.cjs');
+const { resolveToolTarget, timeoutFor, ToolTargetError } = require('./tool-target.cjs');
 const isService = require('../approaches/is/service.cjs');
 const localPack = require('../approaches/local-pack.cjs');
 const { getBinding, loadConnection } = require('../approaches/routes.cjs');
@@ -200,8 +201,10 @@ async function createApproachRun(pool, user, project, body) {
 
   if (approach === 'IS') {
     if (!packId) throw new RunCreateError('PACK_REQUIRED', 'بسته IS را انتخاب کنید.', 422);
-    const health = await isService.packHealth(packId);
-    if (!health.ready) throw new RunCreateError('IS_RUNTIME_DOWN', health.message, 409, health);
+    if (needsLiveRuntime(toolKind)) {
+      const health = await isService.packHealth(packId);
+      if (!health.ready) throw new RunCreateError('IS_RUNTIME_DOWN', health.message, 409, health);
+    }
     const catalog = isService.packCatalog(packId);
     if (toolKind === 'DANGER') {
       const allowed = ['ALL', ...(catalog.automatedFlows || catalog.flows)];
@@ -228,9 +231,15 @@ async function createApproachRun(pool, user, project, body) {
         testFilePath = `${catalog.docPath}/${catalog.tools.PLAYWRIGHT.cwd}`;
         toolTarget = catalog.tools.PLAYWRIGHT.npmScript;
       }
-    } else {
+    } else if (toolKind === 'AXE') {
+      testFilePath = `${catalog.docPath}/${catalog.tools.PLAYWRIGHT.cwd}`;
+      toolTarget = 'axe';
+    } else if (toolKind === 'VITEST') {
       testFilePath = catalog.tools.VITEST.cwd;
       toolTarget = catalog.tools.VITEST.command.join(' ');
+    } else {
+      testFilePath = catalog.docPath;
+      toolTarget = toolKind.toLowerCase();
     }
     sourceSnapshot = JSON.stringify({ approach: 'IS', packId: catalog.id, toolKind, flowId, catalog: catalog.tools });
     reportPaths.product = `test/doc/${catalog.docPath}/reports`;
@@ -243,18 +252,23 @@ async function createApproachRun(pool, user, project, body) {
     const pack = localPack.ensurePack('CDE', projectKey, { title: projectKey });
     flowId = flowId || 'ALL';
     const selected = String(body?.testFilePath || '').replace(/\\/g, '/');
-    if (toolKind === 'DANGER') {
-      testFilePath = selected && selected.endsWith('.mjs') ? selected : 'scripts/api/run.mjs';
-      toolTarget = testFilePath;
-    } else if (toolKind === 'K6') {
-      testFilePath = selected && selected.endsWith('.js') ? selected : 'scripts/k6.js';
-      toolTarget = path.basename(testFilePath);
-    } else if (toolKind === 'PLAYWRIGHT') {
-      testFilePath = selected && /\.(spec|test)\.(ts|js|mjs)$/i.test(selected) ? selected : 'scripts/e2e/health.spec.ts';
-      toolTarget = testFilePath;
-    } else {
-      testFilePath = selected && /\.test\.(cjs|js)$/i.test(selected) ? selected : localPack.defaultUnitPath('CDE', projectKey);
-      toolTarget = testFilePath;
+    try {
+      const resolved = resolveToolTarget({
+        toolKind,
+        selected,
+        defaults: {
+          danger: 'scripts/api/run.mjs',
+          k6: 'scripts/k6.js',
+          playwright: 'scripts/e2e/health.spec.ts',
+          unit: localPack.defaultUnitPath('CDE', projectKey),
+          root: '.',
+        },
+      });
+      testFilePath = resolved.testFilePath;
+      toolTarget = resolved.toolTarget;
+    } catch (error) {
+      if (error instanceof ToolTargetError) throw new RunCreateError(error.code, error.message, error.status);
+      throw error;
     }
     sourceSnapshot = JSON.stringify({ approach: 'CDE', projectKey, toolKind, flowId, packRoot: pack.root });
     reportPaths.product = path.posix.join('runtime/packs/cde', localPack.safeKey(projectKey), 'reports');
@@ -268,18 +282,23 @@ async function createApproachRun(pool, user, project, body) {
     packId = localPack.safeKey(remoteName);
     flowId = flowId || 'ALL';
     const selected = String(body?.testFilePath || '').replace(/\\/g, '/');
-    if (toolKind === 'DANGER') {
-      testFilePath = selected && selected.endsWith('.mjs') ? selected : 'scripts/api/run.mjs';
-      toolTarget = testFilePath;
-    } else if (toolKind === 'K6') {
-      testFilePath = selected && selected.endsWith('.js') ? selected : 'scripts/k6.js';
-      toolTarget = path.basename(testFilePath);
-    } else if (toolKind === 'PLAYWRIGHT') {
-      testFilePath = selected && /\.(spec|test)\.(ts|js|mjs)$/i.test(selected) ? selected : 'scripts/e2e/health.spec.ts';
-      toolTarget = testFilePath;
-    } else {
-      testFilePath = selected && /\.test\.(cjs|js)$/i.test(selected) ? selected : localPack.defaultUnitPath(provider, remoteName);
-      toolTarget = testFilePath;
+    try {
+      const resolved = resolveToolTarget({
+        toolKind,
+        selected,
+        defaults: {
+          danger: 'scripts/api/run.mjs',
+          k6: 'scripts/k6.js',
+          playwright: 'scripts/e2e/health.spec.ts',
+          unit: localPack.defaultUnitPath(provider, remoteName),
+          root: '.',
+        },
+      });
+      testFilePath = resolved.testFilePath;
+      toolTarget = resolved.toolTarget;
+    } catch (error) {
+      if (error instanceof ToolTargetError) throw new RunCreateError(error.code, error.message, error.status);
+      throw error;
     }
     sourceSnapshot = JSON.stringify({
       approach: provider,
@@ -299,12 +318,11 @@ async function createApproachRun(pool, user, project, body) {
     throw new RunCreateError('UNSUPPORTED_APPROACH', 'این اپروچ هنوز برای اجرا پشتیبانی نمی‌شود.', 422);
   }
 
-  const timeoutSeconds = Math.max(
-    Number(body?.timeoutSeconds || settings.rows[0].default_timeout_seconds),
-    toolKind === 'DANGER' && (!flowId || flowId === 'ALL') ? 1800
-      : (approach === 'GITHUB' || approach === 'GIT_EDUS') && toolKind === 'PLAYWRIGHT' ? 1800
-      : toolKind === 'K6' || toolKind === 'PLAYWRIGHT' ? 900 : 0,
-  );
+  const timeoutSeconds = timeoutFor(toolKind, {
+    flowId,
+    approach,
+    fallback: body?.timeoutSeconds || settings.rows[0].default_timeout_seconds,
+  });
   const runValues = [
     projectId, environment.id, testFilePath, sourceSnapshot, browsers, Boolean(body?.headed),
     Number(body?.workers || settings.rows[0].default_workers), Number(body?.retries || settings.rows[0].default_retries),

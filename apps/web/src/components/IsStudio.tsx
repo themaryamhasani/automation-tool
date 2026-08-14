@@ -6,7 +6,7 @@ import type { IsHealthCheck, Run, ToolKind } from '../types';
 import { FilePreview } from './PrettyDocument';
 import {
   CreateFileDialog, CreateFolderDialog, EditorPane, FileTree, StudioChrome, StudioTabs, TOOLS,
-  inferTool, isPathUnder, runMismatch, type DirEntry, type OpenFile, type SectionId,
+  inferTool, isPathUnder, needsLiveRuntime, runMismatch, selectedToolKind, type DirEntry, type OpenFile, type SectionId,
 } from './studio';
 import { Badge, Button, EmptyState, Loading, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
@@ -47,6 +47,7 @@ export function IsStudio() {
   const [lastRun, setLastRun] = useState<Run | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadedTreeQuery, setLoadedTreeQuery] = useState('');
+  const [treeEpoch, setTreeEpoch] = useState(0);
   fileRef.current = file;
 
   const product = products.find(item => item.id === packId);
@@ -134,8 +135,12 @@ export function IsStudio() {
       });
       setShowCreate(false);
       setFile({ path: saved.path, name: saved.name, code: saved.code, original: saved.code });
+      const inferred = inferTool(saved.path);
+      if (inferred) setTool(inferred);
       const dir = await api<{ entries: DirEntry[] }>(`/api/approaches/is/dir?path=${encodeURIComponent(folderPath)}`);
       setRoot(dir.entries);
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       notify('فایل جدید ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد فایل ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -149,6 +154,8 @@ export function IsStudio() {
       setShowFolder(false);
       const dir = await api<{ entries: DirEntry[] }>(`/api/approaches/is/dir?path=${encodeURIComponent(folderPath)}`);
       setRoot(dir.entries);
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       notify('پوشه ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد پوشه ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -163,6 +170,8 @@ export function IsStudio() {
       if (file && isPathUnder(entry.path, file.path)) setFile(null);
       const dir = await api<{ entries: DirEntry[] }>(`/api/approaches/is/dir?path=${encodeURIComponent(folderPath)}`);
       setRoot(dir.entries);
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       notify('حذف شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'حذف ناموفق بود.', 'error'); }
   }
@@ -171,7 +180,7 @@ export function IsStudio() {
     if (!product || !runnable) return;
     const mismatch = runMismatch(tool, file?.path);
     if (mismatch) { notify(mismatch, 'error'); return; }
-    const toolKind = inferTool(file?.path) || tool;
+    const toolKind = selectedToolKind(tool, file?.path);
     setRunning(true);
     try {
       const created = await api<Run>('/api/workspace/runs', {
@@ -233,14 +242,14 @@ export function IsStudio() {
     </aside>}
     tabs={<StudioTabs sections={SECTIONS} active={section} onChange={id => setSection(id as SectionId)} />}
     toolbar={section === 'scripts' ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
-      <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-40 bg-slate-900 text-slate-100">
+      <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
         {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
       </Select>
       {tool === 'DANGER' && <Select value={flowId} onChange={event => setFlowId(event.target.value)} className="min-w-28 bg-slate-900 text-slate-100">
         <option value="ALL">ALL</option>
         {(product?.automatedFlows || product?.flows || []).map(flow => <option key={flow} value={flow}>{flow}</option>)}
       </Select>}
-      <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} disabled={!runnable || (tool !== 'VITEST' && health?.ready === false)} onClick={() => void runTool()}>اجرا</Button>
+      <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} disabled={!runnable || (needsLiveRuntime(tool) && health?.ready === false)} onClick={() => void runTool()}>اجرا</Button>
       {canWrite && <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>}
       <div className="ms-auto flex items-center gap-2 text-[11px] text-slate-400">
         {file?.path && <code className="max-w-56 truncate text-slate-500" dir="ltr">{file.name}</code>}
@@ -251,11 +260,12 @@ export function IsStudio() {
     </div> : undefined)}
     hint={<>
       {section === 'scripts' && <p className="border-b border-slate-800 px-3 py-1 text-[11px] text-slate-500">
-        <span dir="ltr">.mjs / run-by-flow</span> با Node danger · <span dir="ltr">k6-*.js</span> با k6 · <span dir="ltr">.spec.ts</span> با Playwright · <span dir="ltr">.test.cjs</span> با Vitest
+        <span dir="ltr">.mjs</span> danger · <span dir="ltr">k6-*.js</span> k6 · <span dir="ltr">.spec.ts</span> Playwright · <span dir="ltr">openapi.yaml</span> Spectral · Biome / gitleaks / audit / Semgrep روی کل بسته · axe روی UI زنده
       </p>}
       {section === 'scripts' && health?.checks?.length ? <div className="flex flex-wrap gap-2 border-b border-slate-800 px-3 py-2">{health.checks.map(check => <span key={check.name} className={cn('rounded-full px-2 py-0.5 text-[10px]', check.ok ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200')}>{check.name} {check.ok ? `HTTP ${check.status}` : 'down'}</span>)}</div> : null}
     </>}
     tree={<FileTree
+      key={`${treeQuery}:${treeEpoch}`}
       entries={section === 'docs' ? root.filter(entry => entry.type === 'file' && /\.md$/i.test(entry.name)) : root}
       selectedPath={file?.path}
       query={query}

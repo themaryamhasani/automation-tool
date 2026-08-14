@@ -6,7 +6,7 @@ import type { GitRemoteProject, Run, SourceApproach, ToolKind } from '../types';
 import { FilePreview } from './PrettyDocument';
 import {
   CreateFileDialog, CreateFolderDialog, EditorPane, FileTree, StudioChrome, StudioTabs, TOOLS,
-  inferTool, isPathUnder, runMismatch, type DirEntry, type OpenFile, type SectionId,
+  inferTool, isPathUnder, runMismatch, selectedToolKind, type DirEntry, type OpenFile, type SectionId,
 } from './studio';
 import { Button, EmptyState, Input, Loading, Modal, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
@@ -70,6 +70,7 @@ export function GitStudio({
   const [showFolder, setShowFolder] = useState(false);
   const [lastRun, setLastRun] = useState<Run | null>(null);
   const [loadedTreeQuery, setLoadedTreeQuery] = useState('');
+  const [treeEpoch, setTreeEpoch] = useState(0);
   fileRef.current = file;
 
   const currentSection = SECTIONS.find(item => item.id === section) || SECTIONS[0];
@@ -230,7 +231,11 @@ export function GitStudio({
       });
       setShowCreate(false);
       setFile({ path: saved.path, name: saved.name, code: saved.code, original: saved.code });
+      const inferred = inferTool(saved.path);
+      if (inferred) setTool(inferred);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadLocalDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       if (section === 'flows') await refreshFlows();
       notify('فایل تست در بسته محلی ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد فایل ناموفق بود.', 'error'); }
@@ -244,6 +249,8 @@ export function GitStudio({
       await api(`${packBase}/dir`, { method: 'POST', body: JSON.stringify({ path: folder }) });
       setShowFolder(false);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadLocalDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       notify('پوشه در بسته محلی ساخته شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'ایجاد پوشه ناموفق بود.', 'error'); }
     finally { setSaving(false); }
@@ -257,6 +264,8 @@ export function GitStudio({
       await api(`${packBase}/entry?path=${encodeURIComponent(entry.path)}`, { method: 'DELETE' });
       if (file && isPathUnder(entry.path, file.path)) setFile(null);
       setRoot(section === 'scripts' ? await loadScriptEntries() : await loadLocalDir(currentSection.folder));
+      setLoadedTreeQuery(treeQuery);
+      setTreeEpoch(value => value + 1);
       if (section === 'flows') await refreshFlows();
       notify('از بسته محلی حذف شد.', 'success');
     } catch (error) { notify(error instanceof Error ? error.message : 'حذف ناموفق بود.', 'error'); }
@@ -266,7 +275,7 @@ export function GitStudio({
     if (!selected) return;
     const mismatch = runMismatch(tool, file?.path);
     if (mismatch) { notify(mismatch, 'error'); return; }
-    const toolKind = inferTool(file?.path) || tool;
+    const toolKind = selectedToolKind(tool, file?.path);
     setRunning(true);
     try {
       const created = await api<Run>('/api/workspace/runs', {
@@ -343,7 +352,7 @@ export function GitStudio({
       extra={selected && <a href={selected.htmlUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-blue-300"><ExternalLink className="h-3.5 w-3.5" /><span dir="ltr">{selected.fullName}</span></a>}
     /> : undefined}
     toolbar={session.connected && selected && section === 'scripts' ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
-      <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-40 bg-slate-900 text-slate-100">
+      <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
         {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
       </Select>
       {tool === 'DANGER' && <Select value={flowId} onChange={event => setFlowId(event.target.value)} className="min-w-28 bg-slate-900 text-slate-100">
@@ -355,6 +364,7 @@ export function GitStudio({
       <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>
     </div> : undefined)}
     tree={<FileTree
+      key={`${treeQuery}:${treeEpoch}`}
       entries={root}
       selectedPath={file?.path}
       query={query}

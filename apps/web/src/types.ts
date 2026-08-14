@@ -15,7 +15,7 @@ export interface User {
 }
 
 export type SourceApproach = 'CDE' | 'IS' | 'GITHUB' | 'GIT_EDUS' | 'ZIP';
-export type ToolKind = 'PLAYWRIGHT' | 'DANGER' | 'K6' | 'VITEST';
+export type ToolKind = 'PLAYWRIGHT' | 'DANGER' | 'K6' | 'VITEST' | 'BIOME' | 'GITLEAKS' | 'AUDIT' | 'SEMGREP' | 'SPECTRAL' | 'AXE';
 
 export interface Project {
   id: string;
@@ -166,6 +166,66 @@ export interface Paginated<T> {
   page: number;
   limit: number;
   totalPages: number;
+}
+
+export interface ReportColumn {
+  key: string;
+  label: string;
+  format?: 'text' | 'number' | 'percent' | 'datetime' | 'duration' | 'status';
+}
+
+export interface ReportMetaItem {
+  id: string;
+  audience: string;
+  audienceLabel: string;
+  title: string;
+  subtitle: string;
+  paginated?: boolean;
+  searchable?: boolean;
+}
+
+export interface ReportKpi {
+  key: string;
+  label: string;
+  value: string | number | null;
+  unit?: string;
+}
+
+export interface ReportChart {
+  id: string;
+  title: string;
+  items: Array<{ label: string; value: number }>;
+}
+
+export interface ReportTable {
+  id: string;
+  title: string;
+  columns: ReportColumn[];
+  rows: Array<Record<string, unknown>>;
+}
+
+export interface ReportPayload {
+  id: string;
+  title: string;
+  subtitle: string;
+  audience: string;
+  audienceLabel: string;
+  generatedAt: string;
+  filters: Record<string, unknown>;
+  kpis: ReportKpi[];
+  charts: ReportChart[];
+  tables: ReportTable[];
+  pagination?: { page: number; limit: number; total: number; totalPages: number } | null;
+}
+
+export interface ReportCatalog {
+  reports: ReportMetaItem[];
+  approaches: SourceApproach[];
+  tools: ToolKind[];
+  statuses: RunStatus[];
+  projects: Array<{ id: string; name: string; code: string }>;
+  environments: Array<{ id: string; name: string; projectId: string; projectName: string }>;
+  requesters: Array<{ id: string; fullName: string }>;
 }
 
 export interface CdeConnectionStatus {

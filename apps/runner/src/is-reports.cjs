@@ -158,7 +158,8 @@ function writeToolRaw(pack, toolKey, out) {
   const rawName = toolKey === 'DANGER' ? full.danger.rawFile
     : toolKey === 'K6' ? full.k6.rawFile
       : toolKey === 'PLAYWRIGHT' ? full.e2e.rawFile
-        : full.unit.rawFile;
+        : toolKey === 'VITEST' ? full.unit.rawFile
+          : `${String(toolKey || 'tool').toLowerCase()}-raw.txt`;
   const target = path.join(reportsRoot, rawName);
   fs.writeFileSync(target, out, 'utf8');
   return { rawName, target };

@@ -1,0 +1,21 @@
+rules:
+  - id: eval-detected
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: استفاده از eval در سورس سامانه.
+    pattern: eval(...)
+  - id: new-function-detected
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: سازنده Function مثل eval است.
+    pattern: new Function(...)
+  - id: child-process-exec
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: child_process.exec ورودی را به شل می‌سپارد.
+    pattern: child_process.exec(...)
+  - id: innerhtml-assignment
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: innerHTML بدون sanitization خطر XSS دارد.
+    pattern: $EL.innerHTML = $HTML

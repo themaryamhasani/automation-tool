@@ -147,7 +147,7 @@ function listPacks() {
     docPath: pack.docPath,
     flows: pack.flows,
     automatedFlows: pack.automatedFlows || pack.flows,
-    tools: ['DANGER', 'K6', 'PLAYWRIGHT', 'VITEST'],
+    tools: ['DANGER', 'K6', 'PLAYWRIGHT', 'VITEST', 'BIOME', 'GITLEAKS', 'AUDIT', 'SEMGREP', 'SPECTRAL', 'AXE'],
     e2eBaseUrl: pack.e2eBaseUrl,
     health: pack.health.map(item => ({ name: item.name, url: item.url, optional: Boolean(item.optional) })),
   }));

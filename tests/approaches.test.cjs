@@ -9,7 +9,7 @@ const { writeFlowReport, parseSummary } = require('../apps/runner/src/is-reports
 
 test('source approaches and tools are registered', () => {
   assert.deepEqual(Object.keys(SOURCE_APPROACHES).sort(), ['CDE', 'GITHUB', 'GIT_EDUS', 'IS', 'ZIP']);
-  assert.deepEqual(Object.keys(TOOL_KINDS).sort(), ['DANGER', 'K6', 'PLAYWRIGHT', 'VITEST']);
+  assert.deepEqual(Object.keys(TOOL_KINDS).sort(), ['AUDIT', 'AXE', 'BIOME', 'DANGER', 'GITLEAKS', 'K6', 'PLAYWRIGHT', 'SEMGREP', 'SPECTRAL', 'VITEST']);
 });
 
 test('IS products map to test/doc folders and listDir stays inside test/', async () => {
@@ -120,6 +120,8 @@ test('CDE local pack seeds scripts and Express runtime serves /health', async ()
     const pack = localPack.ensurePack('CDE', 'demo-app', { title: 'demo' });
     assert.ok(fs.existsSync(path.join(pack.root, 'scripts/api/run.mjs')));
     assert.ok(fs.existsSync(path.join(pack.root, 'scripts/e2e/health.spec.ts')));
+    assert.ok(fs.existsSync(path.join(pack.root, 'scripts/openapi.yaml')));
+    assert.ok(fs.existsSync(path.join(pack.root, 'biome.json')));
     const webUiPack = 'pages/component/medu-community/community/auth';
     const apiPack = 'ds/medu-community/announcements/load/all';
     const built = buildExpressPackage({

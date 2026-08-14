@@ -192,6 +192,12 @@ function packCatalog(packId) {
       K6: { cwd: pack.k6.cwd, script: pack.k6.script, rawFile: pack.k6.rawFile },
       PLAYWRIGHT: { cwd: pack.e2e.cwd, npmScript: pack.e2e.npmScript, rawFile: pack.e2e.rawFile, channel: pack.e2e.channel, baseUrl: pack.e2eBaseUrl },
       VITEST: { cwd: pack.unit.cwdFromRepo, command: pack.unit.command, rawFile: pack.unit.rawFile },
+      BIOME: { cwd: '.', config: 'biome.json' },
+      GITLEAKS: { cwd: '.' },
+      AUDIT: { cwd: '.' },
+      SEMGREP: { cwd: '.' },
+      SPECTRAL: { cwd: 'scripts', spec: 'openapi.yaml' },
+      AXE: { cwd: pack.e2e.cwd, baseUrl: pack.e2eBaseUrl },
     },
     reportLayout: {
       readme: 'reports/00-readme.md',

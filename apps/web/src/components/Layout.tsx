@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
-  Activity, Bell, Building2, LogOut, Menu, PanelRightClose, PanelRightOpen, PanelsTopLeft,
+  Activity, Bell, Building2, BarChart3, LogOut, Menu, PanelRightClose, PanelRightOpen, PanelsTopLeft,
   RefreshCw, Settings, Terminal, TestTube2, UserRound, Users,
 } from 'lucide-react';
 import { useAuth } from '../auth';
@@ -13,6 +13,7 @@ const roleLabels = { ADMIN: 'مدیر سیستم', OPERATOR: 'کارشناس ا�
 const primary = [
   { to: '/workspace', label: 'اتوماسیون', icon: PanelsTopLeft },
   { to: '/runs', label: 'تاریخچه اجراها', icon: Terminal },
+  { to: '/reports', label: 'گزارشات', icon: BarChart3 },
 ];
 const admin = [
   { to: '/projects', label: 'پروژه‌ها و محیط‌ها', icon: Building2 },

@@ -10,6 +10,7 @@ const { isApproach } = require('./approaches/constants.cjs');
 const { tokenFromRequest, sessionCookie, clearSessionCookie } = require('../../../shared/session-cookie.cjs');
 const { startRunEventBus } = require('./runs/events.cjs');
 const { registerRunRoutes } = require('./runs/routes.cjs');
+const { registerReportRoutes } = require('./reports/routes.cjs');
 const { loadCdeProjectContext } = require('./cde/project-context.cjs');
 const { ApiError, asyncRoute, camelRow, cleanText, parsePositiveInt, pagination, paged } = require('./http.cjs');
 
@@ -246,6 +247,32 @@ function createServer() {
     res.json(camelRow(result.rows[0]));
   }));
 
+  app.delete('/api/projects/:id', requireRole('ADMIN'), asyncRoute(async (req, res) => {
+    const existing = await pool.query('SELECT id, name, is_active FROM projects WHERE id=$1', [req.params.id]);
+    if (!existing.rowCount) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'پروژه پیدا نشد.');
+    const runCount = await pool.query('SELECT count(*)::int AS total FROM runs WHERE project_id=$1', [req.params.id]);
+    if (runCount.rows[0].total > 0) {
+      const archived = await pool.query(
+        `UPDATE projects SET is_active=false, updated_at=now() WHERE id=$1 RETURNING *`,
+        [req.params.id],
+      );
+      await audit(pool, req.user.id, 'PROJECT_ARCHIVED', 'PROJECT', req.params.id, { reason: 'HAS_RUNS', runCount: runCount.rows[0].total });
+      res.json({ ...camelRow(archived.rows[0]), archived: true, deleted: false, runCount: runCount.rows[0].total });
+      return;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM projects WHERE id=$1', [req.params.id]);
+      await audit(client, req.user.id, 'PROJECT_DELETED', 'PROJECT', req.params.id, { name: existing.rows[0].name });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally { client.release(); }
+    res.json({ id: req.params.id, deleted: true, archived: false });
+  }));
+
   app.get('/api/projects/:projectId/environments', asyncRoute(async (req, res) => {
     await ensureProjectAccess(req.user, req.params.projectId);
     const result = await pool.query("SELECT *, (enabled AND (available_from IS NULL OR available_from<=now()) AND (available_until IS NULL OR available_until>now())) AS available_now FROM environments WHERE project_id=$1 ORDER BY enabled DESC, name", [req.params.projectId]);
@@ -463,6 +490,7 @@ function createServer() {
   }));
 
   registerRunRoutes(app, { pool, audit, ensureProjectAccess });
+  registerReportRoutes(app, { pool, audit, ensureProjectAccess });
 
   app.get('/api/settings/runner', asyncRoute(async (_req, res) => {
     const result = await pool.query('SELECT * FROM runner_settings WHERE id=1');

@@ -1,0 +1,21 @@
+{
+  "files": {
+    "ignore": [
+      "node_modules",
+      "dist",
+      "build",
+      "coverage",
+      "artifacts",
+      "test-results",
+      "playwright-report",
+      ".git",
+      "runtime"
+    ]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": { "recommended": true }
+  },
+  "formatter": { "enabled": false },
+  "organizeImports": { "enabled": false }
+}

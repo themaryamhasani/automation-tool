@@ -1,3 +1,5 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { decryptText } = require('../../../shared/snapshot-crypto.cjs');
 const { buildExpressPackage } = require('../../api/src/cde/express-pack.cjs');
@@ -69,6 +71,21 @@ function startRuntime(appRoot, port) {
   };
 }
 
+async function writeSnapshotTree(pool, snapshotId, dest) {
+  const { files } = await loadSnapshotFiles(pool, snapshotId);
+  fs.mkdirSync(dest, { recursive: true });
+  const root = path.resolve(dest);
+  for (const file of files) {
+    const relative = String(file.path || '').replace(/\\/g, '/');
+    if (!relative || relative.startsWith('/') || relative.split('/').some(part => !part || part === '.' || part === '..')) continue;
+    const target = path.resolve(root, ...relative.split('/'));
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, file.code || '', 'utf8');
+  }
+  return { dest: root, fileCount: files.length };
+}
+
 async function materializeExpressRuntime(pool, run) {
   const projectKey = run.pack_id || run.cde_project_key;
   if (!projectKey) throw new Error('کلید پروژه CDE برای رانتایم مشخص نیست.');
@@ -90,4 +107,4 @@ async function materializeExpressRuntime(pool, run) {
   return { ...built, runtime, snapshotManifest: manifest };
 }
 
-module.exports = { materializeExpressRuntime, loadSnapshotFiles };
+module.exports = { materializeExpressRuntime, loadSnapshotFiles, writeSnapshotTree };

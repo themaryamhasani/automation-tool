@@ -210,19 +210,17 @@ async function buildSnapshot(pool, snapshot) {
     }
   }
 
-  if (!snapshot.tool_kind || /PLAYWRIGHT|VITEST|K6|DANGER/i.test(String(snapshot.tool_kind))) {
-    const testRows = await pool.query('SELECT id,folder_path,file_name,source_code,revision,cde_binding FROM test_files WHERE project_id=$1 ORDER BY folder_path,file_name', [snapshot.project_id]);
-    const testManifest = [];
-    for (const test of testRows.rows) {
-      const relative = normalizeSourcePath(`${test.folder_path}/${test.file_name}`).replace(/^tests\//, '');
-      const target = `tests/${relative}`;
-      addFile(files, paths, { path: target, code: test.source_code, repositoryType: 'TESTS', repoName: mapping?.test_repo_name || `playwright/${projectKey}`, packId: mapping?.test_pack_id || `playwright/${projectKey}`, versionId: String(test.revision) });
-      totalBytes += Buffer.byteLength(test.source_code);
-      testManifest.push({ id: test.id, path: target, revision: test.revision, sourceHash: hash(test.source_code), binding: test.cde_binding || null });
-      if (totalBytes > MAX_SNAPSHOT_BYTES) throw Object.assign(new Error('حجم Snapshot CDE از سقف مجاز بیشتر شد.'), { code: 'CDE_SNAPSHOT_TOO_LARGE', status: 413 });
-    }
-    packages.push({ repositoryType: 'TESTS', storage: 'POSTGRESQL', repoName: mapping?.test_repo_name || `playwright/${projectKey}`, packId: mapping?.test_pack_id || `playwright/${projectKey}`, versionId: hash(JSON.stringify(testManifest)), files: testManifest });
+  const testRows = await pool.query('SELECT id,folder_path,file_name,source_code,revision,cde_binding FROM test_files WHERE project_id=$1 ORDER BY folder_path,file_name', [snapshot.project_id]);
+  const testManifest = [];
+  for (const test of testRows.rows) {
+    const relative = normalizeSourcePath(`${test.folder_path}/${test.file_name}`).replace(/^tests\//, '');
+    const target = `tests/${relative}`;
+    addFile(files, paths, { path: target, code: test.source_code, repositoryType: 'TESTS', repoName: mapping?.test_repo_name || `playwright/${projectKey}`, packId: mapping?.test_pack_id || `playwright/${projectKey}`, versionId: String(test.revision) });
+    totalBytes += Buffer.byteLength(test.source_code);
+    testManifest.push({ id: test.id, path: target, revision: test.revision, sourceHash: hash(test.source_code), binding: test.cde_binding || null });
+    if (totalBytes > MAX_SNAPSHOT_BYTES) throw Object.assign(new Error('حجم Snapshot CDE از سقف مجاز بیشتر شد.'), { code: 'CDE_SNAPSHOT_TOO_LARGE', status: 413 });
   }
+  packages.push({ repositoryType: 'TESTS', storage: 'POSTGRESQL', repoName: mapping?.test_repo_name || `playwright/${projectKey}`, packId: mapping?.test_pack_id || `playwright/${projectKey}`, versionId: hash(JSON.stringify(testManifest)), files: testManifest });
   files.sort((left, right) => left.path.localeCompare(right.path));
   const manifest = {
     format: 2,

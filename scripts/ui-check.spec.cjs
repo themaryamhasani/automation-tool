@@ -9,6 +9,16 @@ async function login(page) {
   await expect(page.getByRole('button', { name: /^IS/ })).toBeVisible({ timeout: 20_000 });
 }
 
+test('workspace tool list includes quality scanners', async ({ page }) => {
+  await login(page);
+  await page.getByRole('button', { name: /^IS/ }).click();
+  const tools = page.locator('select').filter({ hasText: 'Node danger' }).first();
+  await expect(tools).toBeVisible();
+  await expect(tools).toContainText('Biome');
+  await expect(tools).toContainText('gitleaks');
+  await expect(tools).toContainText('axe-core');
+});
+
 test('login reaches workspace without browser errors', async ({ page }) => {
   const errors = [];
   page.on('console', message => message.type() === 'error' && errors.push(message.text()));
@@ -21,6 +31,7 @@ test('admin routes render current headings after login', async ({ page }) => {
   await login(page);
   const routes = [
     ['/runs', 'تاریخچه اجراها'],
+    ['/reports', 'گزارشات مدیریتی'],
     ['/projects', 'پروژه‌ها و محیط‌ها'],
     ['/users', 'کاربران و دسترسی‌ها'],
     ['/settings', 'تنظیمات'],

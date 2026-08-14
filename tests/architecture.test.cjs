@@ -75,6 +75,21 @@ test('workspace UI waits for requests before showing empty or missing states', (
   assert.match(workspace, /در حال آماده‌سازی پروژه/);
 });
 
+test('create-file dialog is editable and exposes OpenAPI/custom artifacts', () => {
+  const studio = fs.readFileSync(path.resolve(__dirname, '..', 'apps/web/src/components/studio.tsx'), 'utf8');
+  const projectsPage = fs.readFileSync(path.resolve(__dirname, '..', 'apps/web/src/pages/ProjectsPage.tsx'), 'utf8');
+  const server = fs.readFileSync(path.resolve(__dirname, '..', 'apps/api/src/server.cjs'), 'utf8');
+  assert.match(studio, /متن فایل — قابل ویرایش/);
+  assert.match(studio, /<CodeEditor value=\{source\} onChange=\{setSource\}/);
+  assert.doesNotMatch(studio, /<CodeEditor value=\{preview\} readOnly/);
+  assert.match(studio, /'openapi', 'custom'/);
+  assert.match(studio, /id: 'custom'/);
+  assert.match(server, /app\.delete\('\/api\/projects\/:id'/);
+  assert.match(server, /PROJECT_DELETED/);
+  assert.match(projectsPage, /حذف سامانه/);
+  assert.match(projectsPage, /removeProject/);
+});
+
 test('GitHub checkout is copied into the run workspace instead of mutating a sibling folder', () => {
   const tools = fs.readFileSync(path.resolve(__dirname, '..', 'apps/runner/src/tools.cjs'), 'utf8');
   assert.match(tools, /isolateSiblingCheckout/);
@@ -98,6 +113,30 @@ test('run list and detail queries never select r.* or full source_snapshot', () 
   assert.match(createRun, /testFileId/);
 });
 
+test('management reports live in reports modules and never select r.*', () => {
+  const root = path.resolve(__dirname, '..');
+  const server = fs.readFileSync(path.join(root, 'apps/api/src/server.cjs'), 'utf8');
+  const routes = fs.readFileSync(path.join(root, 'apps/api/src/reports/routes.cjs'), 'utf8');
+  const queries = fs.readFileSync(path.join(root, 'apps/api/src/reports/queries.cjs'), 'utf8');
+  const catalog = fs.readFileSync(path.join(root, 'apps/api/src/reports/catalog.cjs'), 'utf8');
+  const webApp = fs.readFileSync(path.join(root, 'apps/web/src/App.tsx'), 'utf8');
+  const layout = fs.readFileSync(path.join(root, 'apps/web/src/components/Layout.tsx'), 'utf8');
+  assert.match(server, /registerReportRoutes/);
+  assert.doesNotMatch(server, /app\.(get|post)\('\/api\/reports/);
+  assert.match(routes, /\/api\/reports\/:id\/excel/);
+  assert.match(catalog, /id: 'executive'/);
+  assert.match(catalog, /id: 'engineering'/);
+  assert.match(catalog, /id: 'quality'/);
+  assert.match(catalog, /id: 'team'/);
+  assert.match(catalog, /id: 'security'/);
+  assert.match(catalog, /id: 'runs'/);
+  assert.doesNotMatch(queries, /SELECT r\.\*/);
+  assert.doesNotMatch(queries, /SELECT \*/);
+  assert.doesNotMatch(routes, /SELECT r\.\*/);
+  assert.match(webApp, /path="\/reports"/);
+  assert.match(layout, /گزارشات/);
+});
+
 test('imported Playwright files use the standalone PostgreSQL CDE binding', async () => {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
@@ -110,4 +149,22 @@ test('imported Playwright files use the standalone PostgreSQL CDE binding', asyn
       assert.equal(row.cde_binding.playwrightStore.repoName, 'automation_tool_test_files');
     }
   } finally { await client.end(); }
+});
+
+test('quality tools live in runner and create-run, not server.cjs', () => {
+  const root = path.resolve(__dirname, '..');
+  const server = fs.readFileSync(path.join(root, 'apps/api/src/server.cjs'), 'utf8');
+  const tools = fs.readFileSync(path.join(root, 'apps/runner/src/tools.cjs'), 'utf8');
+  const createRun = fs.readFileSync(path.join(root, 'apps/api/src/runs/create-run.cjs'), 'utf8');
+  const studio = fs.readFileSync(path.join(root, 'apps/web/src/components/studio.tsx'), 'utf8');
+  const migration = fs.readFileSync(path.join(root, 'database/006_quality_tools.sql'), 'utf8');
+  assert.equal(fs.existsSync(path.join(root, 'apps/runner/src/quality-tools.cjs')), true);
+  assert.match(tools, /require\('\.\/quality-tools\.cjs'\)/);
+  assert.match(createRun, /needsLiveRuntime/);
+  assert.match(createRun, /resolveToolTarget/);
+  assert.doesNotMatch(server, /gitleaks|semgrep|spectral-cli/);
+  assert.match(studio, /id: 'BIOME'/);
+  assert.match(studio, /id: 'GITLEAKS'/);
+  assert.match(migration, /GITLEAKS/);
+  assert.match(migration, /SPECTRAL/);
 });
