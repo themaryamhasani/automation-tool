@@ -7,12 +7,14 @@
     "apps/*"
   ],
   "scripts": {
+    "predev": "node scripts/prepare-is-playwright.cjs",
     "dev": "concurrently -n api,web,runner -c blue,cyan,magenta \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:runner\"",
     "dev:web": "npm run dev -w @automation-tool/web",
     "dev:api": "npm run dev -w @automation-tool/api",
     "dev:runner": "npm run dev -w @automation-tool/runner",
     "start:api": "npm run start -w @automation-tool/api",
     "start:runner": "npm run start -w @automation-tool/runner",
+    "prepare:is-playwright": "node scripts/prepare-is-playwright.cjs",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint apps/web/src apps/api/src apps/runner/src shared tests scripts",

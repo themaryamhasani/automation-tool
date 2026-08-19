@@ -1,6 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseSummary, stamp } = require('./is-reports.cjs');
+const {
+  enrichSummary,
+  formatFindingsSection,
+  writeFindingsReport,
+  failedFindings,
+} = require('./report-findings.cjs');
 
 const TOOL_META = {
   DANGER: { key: 'danger', label: 'Node danger', raw: 'danger-run-raw.txt' },
@@ -84,6 +90,7 @@ function writeFlowReport(root, { title, id, flow, code, out, when, stats, comman
     .split(/\r?\n/)
     .filter(line => /PASS|FAIL|SKIP|SUMMARY|--- |✓|✘|passed|failed|skipped/i.test(line) && !/CategoryInfo|FullyQualified|RemoteException/.test(line))
     .join('\n');
+  const findings = formatFindingsSection(stats.details || [], { toolKind: command?.toolKind || tool });
   const md = `# گزارش فلو \`${flow}\` — ${title} (${id})
 
 | فیلد | مقدار |
@@ -108,6 +115,7 @@ function writeFlowReport(root, { title, id, flow, code, out, when, stats, comman
 ${detail || 'خروجی قابل استخراج نبود.'}
 \`\`\`
 
+${findings}
 Raw: [raw/${flow}-${tool}.txt](raw/${flow}-${tool}.txt)
 
 فهرست اجرا: [../../scripts/RUN-BY-FLOW.md](../../scripts/RUN-BY-FLOW.md)
@@ -156,6 +164,10 @@ ${flows.map(flow => `- [\`${flow}\`](../by-flow/${flow}.md)`).join('\n') || '- �
 
 function writeStatusBoard(root, { title, id, when, flows, tools, latest }) {
   const openFails = tools.filter(item => item.stats.fail).length + flows.filter(item => item.parsed.fail).length;
+  const findings = failedFindings(latest.details || []);
+  const findingsBlock = findings.length
+    ? findings.slice(0, 12).map((item, index) => `| ${index + 1} | ${String(item.title || '').replace(/\|/g, '/')} | \`${item.path || '—'}\` | ${String(item.hint || '').replace(/\|/g, '/')} |`).join('\n')
+    : '| — | یافتهٔ FAIL نیست | — | — |';
   const board = `# تخته وضعیت — ${title} (\`${id}\`)
 
 | فیلد | مقدار |
@@ -163,6 +175,7 @@ function writeStatusBoard(root, { title, id, when, flows, tools, latest }) {
 | به‌روز رسانی | ${when} |
 | منبع فلو | [by-flow/_index.md](by-flow/_index.md) |
 | یافته باز | **${openFails}** |
+| گزارش یافته‌ها | [02-findings.md](02-findings.md) |
 
 ## ۱) فلوها
 
@@ -188,9 +201,16 @@ ${tools.map(item => `| ${item.meta.label} (\`${item.meta.key}\`) | ${toolBadge(i
 ## ۴) لینک‌های سریع
 
 - راهنما: [00-readme.md](00-readme.md)
+- یافته‌ها + Hint: [02-findings.md](02-findings.md)
 - فلوها: [by-flow/_index.md](by-flow/_index.md)
 - ابزارها: [by-tool/_index.md](by-tool/_index.md)
 - اجرای فلو‌محور: از \`scripts/RUN-BY-FLOW.md\`
+
+## ۵) FAILها — مسیر و راهنمای رفع
+
+| # | تست | مسیر ایجاد خطا | Hint |
+|---|------|----------------|------|
+${findingsBlock}
 `;
   fs.writeFileSync(path.join(root, '01-status-board.md'), board, 'utf8');
   const day = String(when).slice(0, 10);
@@ -204,8 +224,11 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
   const id = String(run.pack_id || run.cde_project_key || run.project_id || 'project');
   const heading = title || run.project_name || approachLabel(run);
   const when = stamp();
-  const summary = stats || parseSummary(out);
   const current = toolMeta(run);
+  const summary = enrichSummary(stats || parseSummary(out, null, run.tool_kind), {
+    toolKind: run.tool_kind,
+    out,
+  });
   const flow = String(run.flow_id || 'ALL').toUpperCase();
 
   fs.mkdirSync(path.join(root, 'by-flow', 'raw'), { recursive: true });
@@ -217,7 +240,16 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
 
   writeFlowReport(root, {
     title: heading, id, flow, code, out, when, stats: summary,
-    command: { toolKey: current.key, label: current.label },
+    command: { toolKey: current.key, label: current.label, toolKind: run.tool_kind },
+  });
+
+  const findings = writeFindingsReport(root, {
+    approach: approachLabel(run),
+    toolKind: run.tool_kind,
+    command: current.label,
+    when,
+    stats: summary,
+    out,
   });
 
   const flows = listFlowFiles(root);
@@ -230,6 +262,7 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
 | فایل / پوشه | سؤال |
 |-------------|------|
 | [01-status-board.md](01-status-board.md) | **الان** وضعیت چیست؟ (نقطهٔ ورود روزانه) |
+| [02-findings.md](02-findings.md) | FAILها با **مسیر خطا** و **Hint راه‌حل** |
 | [by-flow/](by-flow/_index.md) | جزئیات هر FLOW |
 | [by-tool/](by-tool/_index.md) | نتیجه به تفکیک ابزار |
 | [history/](history/) | آرشیو زمانی تخته وضعیت |
@@ -242,6 +275,10 @@ function writeLocalTaxonomy(run, { code, out, stats, title, productRoot }) {
 | 🔴 FAIL | حداقل یک FAIL — باید بررسی شود |
 | 🟡 SKIP / PARTIAL | ناقص یا بخشی |
 | ⚫ EMPTY | هنوز ران/فایل نیست |
+
+## قرارداد یافته‌ها (همه اپروچ‌ها)
+
+هر FAIL باید داشته باشد: پیام شفاف، مسیر فایل/تست ایجادکننده، و Hint عملی برای رفع.
 
 ## بازتولید
 
@@ -260,7 +297,7 @@ ${Object.values(TOOL_META).map(meta => `| \`${meta.key}\` | [${meta.key}.md](${m
   const tools = Object.values(TOOL_META).map(meta => {
     const rawPath = path.join(root, meta.raw);
     const exists = fs.existsSync(rawPath);
-    const toolStats = meta.key === current.key ? summary : (exists ? parseSummary(fs.readFileSync(rawPath, 'utf8')) : { pass: 0, fail: 0, skip: 0, total: 0, summary: 'n/a' });
+    const toolStats = meta.key === current.key ? summary : (exists ? parseSummary(fs.readFileSync(rawPath, 'utf8'), null, meta.key.toUpperCase()) : { pass: 0, fail: 0, skip: 0, total: 0, summary: 'n/a', details: [] });
     writeToolPage(root, meta, {
       title: heading, id, code: meta.key === current.key ? code : '—', stats: toolStats, flows, exists,
     });
@@ -268,11 +305,12 @@ ${Object.values(TOOL_META).map(meta => `| \`${meta.key}\` | [${meta.key}.md](${m
   });
 
   const flowRows = flows.map(name => ({ flow: name, parsed: parseFlowFile(path.join(root, 'by-flow', `${name}.md`)) }));
-  writeStatusBoard(root, { title: heading, id, when, flows: flowRows, tools, latest: summary });
+  writeStatusBoard(root, { title: heading, id, when, flows: flowRows, tools, latest: findings.stats });
 
   return {
     product: root,
     board: path.join(root, '01-status-board.md'),
+    findings: findings.file,
     raw: path.join(root, current.raw),
   };
 }

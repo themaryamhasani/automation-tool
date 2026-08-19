@@ -129,7 +129,10 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
       </p>
     )}
     {skipOnly && <p className={cn('mx-3 mb-2 rounded-lg px-2 py-1.5 text-[11px] leading-5', dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800')}>
-      این اجرا تستی را پاس نکرد؛ همه اسکیپ شدند. معمولاً به‌خاطر نبودن شناسه instance یا فایل لاگین (storageState) در <code dir="ltr">.env</code> است.
+      این اجرا تستی را پاس نکرد؛ همه اسکیپ شدند.
+      {details.find(item => item.outcome === 'skipped' && item.error)?.error
+        ? <> دلیل: <span dir="ltr">{details.find(item => item.outcome === 'skipped' && item.error)?.error}</span></>
+        : <> معمولاً شناسه instance یا فایل لاگین (<code dir="ltr">storageState</code> / <code dir="ltr">PREREG_COOKIE</code>) در <code dir="ltr">.env</code> نیست.</>}
     </p>}
     {message && <pre className="mx-3 mb-2 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-red-500/10 px-2 py-1.5 font-mono text-[10px] leading-4 text-red-300" dir="ltr">{message}</pre>}
     {details.length > 0 && <div className="max-h-32 space-y-1 overflow-auto px-3 pb-2">
@@ -139,7 +142,9 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
           <div key={`${item.title}-${index}`} className={cn('flex items-start justify-between gap-2 rounded-lg px-2 py-1 text-xs', tone === 'red' ? (dark ? 'bg-red-500/10' : 'bg-red-50') : tone === 'gray' ? (dark ? 'bg-amber-500/10' : 'bg-amber-50') : dark ? 'bg-white/5' : 'bg-gray-50')}>
             <div className="min-w-0">
               <p className="truncate font-medium">{item.title}</p>
+              {item.path && <p className={cn('mt-0.5 truncate font-mono text-[10px]', dark ? 'text-sky-300' : 'text-sky-700')} dir="ltr">{item.path}</p>}
               {item.error && <pre className={cn('mt-1 whitespace-pre-wrap font-mono text-[10px]', tone === 'red' ? 'text-red-400' : 'text-amber-300')} dir="ltr">{item.error}</pre>}
+              {item.hint && <p className={cn('mt-1 text-[10px] leading-4', dark ? 'text-emerald-200/90' : 'text-emerald-800')}>Hint: {item.hint}</p>}
             </div>
             <span className="inline-flex shrink-0 items-center gap-1">
               {tone === 'red' ? <XCircle className="h-3.5 w-3.5 text-red-400" /> : tone === 'gray' ? <MinusCircle className="h-3.5 w-3.5 text-amber-300" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}

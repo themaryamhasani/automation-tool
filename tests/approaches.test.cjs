@@ -86,16 +86,19 @@ test('non-IS runs write the same report taxonomy under runtime/reports', () => {
       source_approach: 'GITHUB', project_id: 'p1', project_name: 'demo', tool_kind: 'DANGER', flow_id: 'REQ',
     }, { code: 1, out, title: 'demo' });
     assert.ok(fs.existsSync(path.join(saved.product, '01-status-board.md')));
+    assert.ok(fs.existsSync(path.join(saved.product, '02-findings.md')));
     assert.ok(fs.existsSync(path.join(saved.product, 'by-tool', 'danger.md')));
     assert.ok(fs.existsSync(path.join(saved.product, 'by-flow', 'REQ.md')));
     const board = fs.readFileSync(saved.board, 'utf8');
     assert.match(board, /PASS \| 1/);
     assert.match(board, /FAIL \| 1/);
+    assert.match(board, /02-findings\.md/);
     const flow = fs.readFileSync(path.join(saved.product, 'by-flow', 'REQ.md'), 'utf8');
     assert.match(flow, /# گزارش فلو `REQ`/);
-    assert.ok(fs.existsSync(path.join(saved.product, 'danger-run-raw.txt')));
-    assert.ok(fs.existsSync(path.join(saved.product, 'by-tool', '_index.md')));
-    assert.ok(fs.existsSync(path.join(saved.product, 'by-flow', '_index.md')));
+    assert.match(flow, /یافته‌های FAIL و راهنمای رفع/);
+    const findings = fs.readFileSync(path.join(saved.product, '02-findings.md'), 'utf8');
+    assert.match(findings, /Hint|راه‌حل/);
+    assert.match(findings, /مسیر ایجاد خطا/);
   } finally {
     if (previous == null) delete process.env.SOURCE_REPORT_ROOT;
     else process.env.SOURCE_REPORT_ROOT = previous;

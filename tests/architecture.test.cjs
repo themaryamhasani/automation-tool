@@ -159,7 +159,9 @@ test('quality tools live in runner and create-run, not server.cjs', () => {
   const studio = fs.readFileSync(path.join(root, 'apps/web/src/components/studio.tsx'), 'utf8');
   const migration = fs.readFileSync(path.join(root, 'database/006_quality_tools.sql'), 'utf8');
   assert.equal(fs.existsSync(path.join(root, 'apps/runner/src/quality-tools.cjs')), true);
+  assert.equal(fs.existsSync(path.join(root, 'apps/runner/src/playwright-env.cjs')), true);
   assert.match(tools, /require\('\.\/quality-tools\.cjs'\)/);
+  assert.match(tools, /require\('\.\/playwright-env\.cjs'\)/);
   assert.match(createRun, /needsLiveRuntime/);
   assert.match(createRun, /resolveToolTarget/);
   assert.doesNotMatch(server, /gitleaks|semgrep|spectral-cli/);

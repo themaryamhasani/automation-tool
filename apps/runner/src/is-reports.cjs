@@ -3,6 +3,11 @@ const path = require('node:path');
 const { getPack } = require('../../api/src/approaches/is/packs.cjs');
 const { packPaths } = require('../../api/src/approaches/is/service.cjs');
 const { spawnLogged } = require('./process.cjs');
+const {
+  enrichSummary,
+  formatFindingsSection,
+  writeFindingsReport,
+} = require('./report-findings.cjs');
 
 function stamp() {
   const d = new Date();
@@ -31,14 +36,17 @@ function parseCases(out) {
       });
       continue;
     }
-    const playwright = line.match(/^\s+([✓✔✘×xX])\s+(?!(?:PASS|FAIL|SKIP)\b)(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?$/);
+    const playwright = line.match(/^\s+([✓✔✘×xX-])\s+(?!(?:PASS|FAIL|SKIP)\b)(.+?)(?:\s+\(\d+(?:\.\d+)?m?s\))?$/);
     if (playwright) {
+      const mark = playwright[1];
+      const skipped = mark === '-';
+      const passed = /[✓✔]/.test(mark);
       details.push({
         title: playwright[2].trim(),
         projectName: flow || 'e2e',
-        outcome: /[✓✔]/.test(playwright[1]) ? 'expected' : 'unexpected',
+        outcome: passed ? 'expected' : skipped ? 'skipped' : 'unexpected',
         duration: 0,
-        error: /[✓✔]/.test(playwright[1]) ? null : line.trim(),
+        error: passed || skipped ? null : line.trim(),
       });
     }
   }
@@ -61,11 +69,17 @@ function parsePlaywrightJson(file) {
         const skipped = status === 'skipped' || test.expectedStatus === 'skipped';
         const failed = !skipped && ['failed', 'timedOut', 'interrupted', 'unexpected'].includes(status);
         const title = [spec.file && path.basename(spec.file), spec.title, test.title].filter(Boolean).join(' › ');
+        const loc = last.error?.location || last.errors?.[0]?.location || {};
+        const file = spec.file || loc.file || null;
         details.push({
           title: title || spec.title || 'test',
           projectName: test.projectName || 'e2e',
           outcome: skipped ? 'skipped' : failed ? 'unexpected' : 'expected',
           duration: last.duration || 0,
+          file: file || undefined,
+          line: loc.line,
+          column: loc.column,
+          path: file ? `${String(file).replace(/\\/g, '/')}${loc.line != null ? `:${loc.line}` : ''}` : undefined,
           error: skipped
             ? (skipAnn?.description || last.error?.message || null)
             : (last.error?.message || last.errors?.[0]?.message || null),
@@ -89,9 +103,9 @@ function parsePlaywrightJson(file) {
   };
 }
 
-function parseSummary(out, jsonFile) {
+function parseSummary(out, jsonFile, toolKind) {
   const fromJson = parsePlaywrightJson(jsonFile);
-  if (fromJson) return fromJson;
+  if (fromJson) return enrichSummary(fromJson, { toolKind, out });
   const details = parseCases(out);
   const pwPass = Number((out.match(/(\d+) passed/) || [0, 0])[1]);
   const pwFail = Number((out.match(/(\d+) failed/) || [0, 0])[1]);
@@ -106,20 +120,21 @@ function parseSummary(out, jsonFile) {
   const skip = fromDetails.skip || count(/○ SKIP/g, out) || pwSkip;
   const summary = (out.match(/PASS=\d+[^\n]*/) || out.match(/\d+ passed[^\n]*/) || ['n/a'])[0];
   const total = pass + fail + skip;
-  return { pass, fail, skip, total, summary, details };
+  return enrichSummary({ pass, fail, skip, total, summary, details }, { toolKind, out });
 }
 
-function writeFlowReport(pack, flow, { code, out }, when) {
+function writeFlowReport(pack, flow, { code, out, toolKind }, when) {
   const { reportsRoot } = packPaths(pack.id);
   const repDir = path.join(reportsRoot, 'by-flow');
   const rawDir = path.join(repDir, 'raw');
   fs.mkdirSync(rawDir, { recursive: true });
   fs.writeFileSync(path.join(rawDir, `${flow}-danger.txt`), out, 'utf8');
-  const stats = parseSummary(out);
+  const stats = parseSummary(out, null, toolKind || 'DANGER');
   const detail = out
     .split(/\r?\n/)
     .filter(line => /PASS|FAIL|SKIP|SUMMARY|--- /.test(line) && !/CategoryInfo|FullyQualified|RemoteException|At D:\\/.test(line))
     .join('\n');
+  const findings = formatFindingsSection(stats.details, { toolKind: toolKind || 'DANGER' });
   const md = `# گزارش فلو \`${flow}\` — ${pack.title} (${pack.id})
 
 | فیلد | مقدار |
@@ -144,6 +159,7 @@ function writeFlowReport(pack, flow, { code, out }, when) {
 ${detail}
 \`\`\`
 
+${findings}
 Raw: [raw/${flow}-danger.txt](raw/${flow}-danger.txt)
 
 فهرست اجرا: [../../scripts/RUN-BY-FLOW.md](../../scripts/RUN-BY-FLOW.md)
@@ -192,14 +208,55 @@ async function persistIsReports({ packId, toolKind, flowId, code, out, jsonFile 
   const pack = getPack(packId);
   if (!pack) throw new Error(`Unknown IS pack: ${packId}`);
   const when = stamp();
-  const { docRoot } = packPaths(pack.id);
+  const { docRoot, reportsRoot } = packPaths(pack.id);
+  let stats = parseSummary(out, jsonFile, toolKind);
   if (toolKind === 'DANGER' && flowId && flowId !== 'ALL') {
-    writeFlowReport(pack, flowId, { code, out }, when);
+    stats = writeFlowReport(pack, flowId, { code, out, toolKind }, when);
+    writeByFlowIndex(pack, when);
+  } else if (flowId) {
+    // Playwright/k6/vitest: همان قرارداد فلو + یافته‌ها
+    const repDir = path.join(reportsRoot, 'by-flow');
+    const rawDir = path.join(repDir, 'raw');
+    fs.mkdirSync(rawDir, { recursive: true });
+    const tool = String(toolKind || 'tool').toLowerCase();
+    fs.writeFileSync(path.join(rawDir, `${flowId}-${tool}.txt`), out || '', 'utf8');
+    const findings = formatFindingsSection(stats.details, { toolKind });
+    const md = `# گزارش فلو \`${flowId}\` — ${pack.title} (${pack.id})
+
+| فیلد | مقدار |
+|------|--------|
+| تاریخ | ${when} |
+| FLOW | \`${flowId}\` |
+| ابزار | \`${toolKind}\` |
+| exit | ${code} |
+| خلاصه | ${stats.summary} |
+
+## نتایج
+
+| نتیجه | تعداد |
+|--------|------:|
+| PASS | ${stats.pass} |
+| FAIL | ${stats.fail} |
+| SKIP | ${stats.skip} |
+
+${findings}
+Raw: [raw/${flowId}-${tool}.txt](raw/${flowId}-${tool}.txt)
+`;
+    fs.writeFileSync(path.join(repDir, `${flowId}.md`), md, 'utf8');
     writeByFlowIndex(pack, when);
   }
   const raw = writeToolRaw(pack, toolKind, out);
+  const findings = writeFindingsReport(reportsRoot, {
+    approach: 'IS',
+    toolKind,
+    command: `${toolKind}${flowId ? ` · ${flowId}` : ''}`,
+    when,
+    stats,
+    out,
+  });
+  stats = findings.stats;
   const board = await rebuildBoards(docRoot);
-  return { when, raw, boardOut: board.out || '', boardCode: board.code, stats: parseSummary(out, jsonFile) };
+  return { when, raw, boardOut: board.out || '', boardCode: board.code, stats, findings: findings.file };
 }
 
 module.exports = {

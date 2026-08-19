@@ -76,6 +76,12 @@ export interface RunReportTest {
   outcome: string;
   duration: number;
   error?: string | null;
+  /** مسیر فایل/تستی که خطا از آن آمده */
+  path?: string | null;
+  /** راهنمای عملی رفع */
+  hint?: string | null;
+  file?: string | null;
+  line?: number | null;
 }
 
 export interface RunReport {

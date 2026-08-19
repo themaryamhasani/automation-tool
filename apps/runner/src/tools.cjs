@@ -4,7 +4,7 @@ const JSZip = require('jszip');
 const { packPaths } = require('../../api/src/approaches/is/service.cjs');
 const { getPack } = require('../../api/src/approaches/is/packs.cjs');
 const { persistIsReports, parseSummary, parsePlaywrightJson } = require('./is-reports.cjs');
-const { runProcess, playwrightJob, playwrightRepoJob, findRepoPlaywrightConfig, unitJob, resolveBin, ensureNpmInstall } = require('./process.cjs');
+const { runProcess, playwrightJob, playwrightRepoJob, findRepoPlaywrightConfig, unitJob, resolveBin, ensureNpmInstall, prepareIsPlaywrightRuntime } = require('./process.cjs');
 const { writeLocalTaxonomy } = require('./local-reports.cjs');
 const gitClient = require('../../api/src/approaches/git/client.cjs');
 const { projectZipRoot } = require('../../api/src/approaches/zip/service.cjs');
@@ -12,6 +12,7 @@ const localPack = require('../../api/src/approaches/local-pack.cjs');
 const { materializeExpressRuntime, loadSnapshotFiles, writeSnapshotTree } = require('./cde-runtime.cjs');
 const { isStaticTool } = require('../../api/src/approaches/constants.cjs');
 const { axeJob, runQualityTool } = require('./quality-tools.cjs');
+const { preparePlaywrightEnv } = require('./playwright-env.cjs');
 
 function snapshotOf(run) {
   try { return JSON.parse(run.source_snapshot || '{}'); }
@@ -22,15 +23,17 @@ function mergeDotEnv(env, cwd) {
   if (!cwd) return env;
   const file = path.join(cwd, '.env');
   if (!fs.existsSync(file)) return env;
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const text = line.trim();
-    if (!text || text.startsWith('#')) continue;
-    const index = text.indexOf('=');
+  const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  for (const line of text.split(/\r?\n/)) {
+    const raw = line.trim();
+    if (!raw || raw.startsWith('#')) continue;
+    const index = raw.indexOf('=');
     if (index < 1) continue;
-    const key = text.slice(0, index).trim().replace(/^\uFEFF/, '');
-    let value = text.slice(index + 1).trim();
+    const key = raw.slice(0, index).trim().replace(/^\uFEFF/, '');
+    let value = raw.slice(index + 1).trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    if (env[key] === undefined) env[key] = value;
+    const authKey = /^(E2E_|PREREG_|G10_|MID_)/.test(key);
+    if (env[key] === undefined || (authKey && !String(env[key] || '').trim())) env[key] = value;
   }
   return env;
 }
@@ -99,24 +102,32 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
       if (!fs.existsSync(specPath)) throw new Error(`فایل Playwright پیدا نشد: ${selected}`);
     }
     cwd = specPath ? playwrightCwd(specPath, paths.e2eCwd) : paths.e2eCwd;
-    const job = playwrightJob({
-      cwd,
-      specPath,
-      workspace,
-      baseURL: pack.e2eBaseUrl,
-      headed: Boolean(run.headed),
-    });
+    prepareIsPlaywrightRuntime({ docRoot: paths.docRoot, e2eRoots: [paths.e2eCwd] });
+    await ensureNpmInstall(paths.e2eCwd, shouldCancel);
+    const repoConfig = findRepoPlaywrightConfig(paths.e2eCwd) || findRepoPlaywrightConfig(cwd);
+    let job;
+    if (repoConfig) {
+      job = playwrightRepoJob({ sourceRoot: paths.e2eCwd, specPath, workspace });
+    } else {
+      job = playwrightJob({
+        cwd,
+        specPath,
+        workspace,
+        baseURL: pack.e2eBaseUrl,
+        headed: Boolean(run.headed),
+      });
+    }
     command = job.command;
     args = job.args;
     cwd = job.cwd;
     jsonFile = job.jsonFile;
-    env = mergeDotEnv(mergeDotEnv(envWithDotEnv(cwd), paths.e2eCwd), paths.dangerCwd);
-    env = {
+    env = mergeDotEnv(mergeDotEnv(envWithDotEnv(paths.e2eCwd), paths.dangerCwd), cwd);
+    env = preparePlaywrightEnv({
       ...env,
       ...job.envExtra,
-      PW_CHANNEL: pack.e2e.channel || job.envExtra.PW_CHANNEL || 'chrome',
-      E2E_BASE_URL: pack.e2eBaseUrl || env.E2E_BASE_URL,
-    };
+      PW_CHANNEL: pack.e2e.channel || job.envExtra.PW_CHANNEL || env.PW_CHANNEL || 'chrome',
+      E2E_BASE_URL: env.E2E_BASE_URL || pack.e2eBaseUrl,
+    }, { searchDirs: [paths.e2eCwd, paths.dangerCwd, paths.productRoot, cwd, path.join(paths.e2eCwd, '.auth')], workspace });
   } else if (run.tool_kind === 'VITEST') {
     cwd = paths.unitCwd;
     if (!fs.existsSync(cwd)) throw new Error(`پوشه unit سرویس پیدا نشد: ${cwd}`);
@@ -159,7 +170,7 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
         details: reports.stats.details || [],
       },
       reportFiles: [reports.raw?.target].filter(Boolean),
-      reportPaths: { product: `test/doc/${pack.docPath}/reports` },
+      reportPaths: { product: `test/doc/${pack.docPath}/reports`, board: `test/doc/${pack.docPath}/reports/01-status-board.md`, findings: `test/doc/${pack.docPath}/reports/02-findings.md` },
       command: [run.tool_kind],
     };
   } else {
@@ -194,8 +205,8 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
       skipped: reports.stats.skip,
       details: reports.stats.details || [],
     },
-    reportFiles: [reports.raw?.target].filter(Boolean),
-    reportPaths: { product: `test/doc/${pack.docPath}/reports` },
+    reportFiles: [reports.raw?.target, reports.findings].filter(Boolean),
+    reportPaths: { product: `test/doc/${pack.docPath}/reports`, board: `test/doc/${pack.docPath}/reports/01-status-board.md`, findings: `test/doc/${pack.docPath}/reports/02-findings.md` },
     command: [command, ...args],
   };
 }
@@ -374,6 +385,7 @@ async function executeSourceToolRun(run, { shouldCancel, pool, workspace, onLog 
       }
       const job = playwrightRepoJob({ sourceRoot, specPath, workspace });
       Object.assign(env, job.envExtra);
+      Object.assign(env, preparePlaywrightEnv(env, { searchDirs: [sourceRoot, job.cwd, path.join(sourceRoot, 'scripts', 'e2e')], workspace }));
       const result = await runProcess(job.command, job.args, job.cwd, env, timeout, shouldCancel, onLog);
       const jsonFile = [
         job.jsonFile,
@@ -390,6 +402,7 @@ async function executeSourceToolRun(run, { shouldCancel, pool, workspace, onLog 
       baseURL: process.env.UTMS_WEB_BASE_URL || process.env.E2E_BASE_URL || 'http://127.0.0.1:5173',
     });
     Object.assign(env, job.envExtra);
+    Object.assign(env, preparePlaywrightEnv(env, { searchDirs: [e2eCwd, sourceRoot], workspace }));
     return finishSource(run, await runProcess(job.command, job.args, job.cwd, env, timeout, shouldCancel, onLog), [job.command, ...job.args], job.jsonFile);
   }
   const result = await runProcess(command, args, cwd, env, timeout, shouldCancel, onLog);
@@ -405,7 +418,7 @@ function finishSource(run, result, command, jsonFile) {
     summary: { total: stats.total, passed: stats.pass, failed: stats.fail, skipped: stats.skip, details: stats.details || [] },
     command,
     reportFiles: [saved.board, saved.raw].filter(item => item && fs.existsSync(item)),
-    reportPaths: { product: saved.product, board: saved.board },
+    reportPaths: { product: saved.product, board: saved.board, findings: saved.findings },
   };
 }
 
@@ -476,7 +489,7 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
       summary: { total: stats.total, passed: stats.pass, failed: stats.fail, skipped: stats.skip, details: stats.details || [] },
       command: [run.tool_kind],
       reportFiles: [saved.board, saved.raw].filter(item => item && fs.existsSync(item)),
-      reportPaths: { product: saved.product, board: saved.board },
+      reportPaths: { product: saved.product, board: saved.board, findings: saved.findings },
     };
   }
   const built = await materializeExpressRuntime(pool, run);
@@ -500,6 +513,7 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
   let command;
   let args;
   let cwd = pack.root;
+  let jsonFile = null;
   try {
     if (run.tool_kind === 'DANGER') {
       const script = resolved && fs.existsSync(resolved)
@@ -546,7 +560,9 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
       command = job.command;
       args = job.args;
       cwd = job.cwd;
+      jsonFile = job.jsonFile;
       Object.assign(env, job.envExtra);
+      Object.assign(env, preparePlaywrightEnv(env, { searchDirs: [cwd, pack.root], workspace }));
     }
     let result;
     try {
@@ -558,7 +574,7 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
         throw error;
       }
     }
-    const stats = parseSummary(result.out);
+    const stats = parsePlaywrightJson(jsonFile) || parseSummary(result.out);
     const saved = writeLocalTaxonomy(run, {
       code: result.code,
       out: result.out,
@@ -572,7 +588,7 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
       summary: { total: stats.total, passed: stats.pass, failed: stats.fail, skipped: stats.skip, details: stats.details || [] },
       command: [command, ...args],
       reportFiles: [saved.board, saved.raw].filter(item => item && fs.existsSync(item)),
-      reportPaths: { product: saved.product, board: saved.board, express: built.appRoot },
+      reportPaths: { product: saved.product, board: saved.board, findings: saved.findings, express: built.appRoot },
     };
   } finally {
     await built.runtime.stop();

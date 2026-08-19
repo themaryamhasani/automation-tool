@@ -108,8 +108,13 @@ export function scriptTemplate(fileName: string) {
     return `import { test, expect } from '@playwright/test';
 
 test('scenario', async ({ page, request }) => {
-  const base = process.env.AUTOMATION_RUNTIME_URL || process.env.BASE_URL || 'http://127.0.0.1:4012';
-  await page.goto(base);
+  const base = (process.env.AUTOMATION_RUNTIME_URL || process.env.BASE_URL || 'http://127.0.0.1:4012').replace(/\\/$/, '');
+  const health = await request.get(\`\${base}/health\`);
+  if (health.ok()) {
+    const body = await health.json().catch(() => ({}));
+    expect(body.ok ?? true).toBeTruthy();
+  }
+  await page.goto(base || '/');
   await expect(page).toHaveTitle(/./);
 });
 `;

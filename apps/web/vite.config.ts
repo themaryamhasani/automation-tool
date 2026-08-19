@@ -20,6 +20,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5180,
+    strictPort: true,
     proxy: {
       '/api': {
         target: process.env.API_BASE_URL || 'http://localhost:4280',

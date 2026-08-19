@@ -8,8 +8,38 @@ const { decryptText } = require('../../../shared/snapshot-crypto.cjs');
 const { excerptLogs, notifyRun } = require('../../../shared/log-excerpt.cjs');
 const { executeNonCdeRun } = require('./tools.cjs');
 const { writeLocalTaxonomy } = require('./local-reports.cjs');
-const { spawnLogged, sanitizeEnv, chromePath } = require('./process.cjs');
+const { enrichSummary } = require('./report-findings.cjs');
+const { spawnLogged, sanitizeEnv, chromePath, prepareIsPlaywrightRuntime } = require('./process.cjs');
+const { listPacks } = require('../../api/src/approaches/is/packs.cjs');
+const { packPaths } = require('../../api/src/approaches/is/service.cjs');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+
+function prepareIsPlaywrightOnBoot() {
+  try {
+    const e2eRoots = [];
+    let docRoot;
+    for (const pack of listPacks()) {
+      try {
+        const paths = packPaths(pack.id);
+        docRoot = paths.docRoot;
+        e2eRoots.push(paths.e2eCwd);
+      } catch {
+        /* pack folder missing on disk */
+      }
+    }
+    const prepared = prepareIsPlaywrightRuntime({ docRoot, e2eRoots });
+    console.log(JSON.stringify({
+      event: 'is-playwright-prepared',
+      sharedPackage: prepared.sharedPackage || null,
+      restoredStashes: prepared.restored.length,
+    }));
+  } catch (error) {
+    console.log(JSON.stringify({
+      event: 'is-playwright-prepare-skip',
+      message: error && error.message,
+    }));
+  }
+}
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const runnerId = process.env.RUNNER_ID || `automation-runner-${process.pid}`;
@@ -152,11 +182,16 @@ function collectReport(report) {
     for (const spec of suite.specs || []) {
       for (const test of spec.tests || []) {
         const last = test.results?.[test.results.length - 1] || {};
+        const loc = last.error?.location || last.errors?.[0]?.location || {};
+        const file = spec.file || loc.file || null;
         tests.push({
           title: [...prefix, spec.title].filter(Boolean).join(' › '),
           projectName: test.projectName || '',
           outcome: test.status || last.status || 'unknown',
           duration: (test.results || []).reduce((sum, result) => sum + Number(result.duration || 0), 0),
+          file: file || undefined,
+          line: loc.line,
+          path: file ? `${String(file).replace(/\\/g, '/')}${loc.line != null ? `:${loc.line}` : ''}` : undefined,
           error: last.error?.message || last.errors?.[0]?.message || null,
         });
       }
@@ -167,12 +202,28 @@ function collectReport(report) {
   const failed = tests.filter(test => ['unexpected', 'failed', 'timedOut', 'interrupted'].includes(test.outcome)).length;
   const skipped = tests.filter(test => test.outcome === 'skipped').length;
   const passed = Math.max(0, tests.length - failed - skipped);
-  return {
+  const summary = enrichSummary({
     total: tests.length,
     passed,
     failed,
     skipped,
-    details: tests.slice(0, 500),
+    pass: passed,
+    fail: failed,
+    skip: skipped,
+    summary: `${passed} passed, ${failed} failed, ${skipped} skipped`,
+    details: tests.slice(0, 500).map(item => ({
+      ...item,
+      outcome: ['unexpected', 'failed', 'timedOut', 'interrupted'].includes(item.outcome)
+        ? 'unexpected'
+        : item.outcome === 'skipped' ? 'skipped' : 'expected',
+    })),
+  }, { toolKind: 'PLAYWRIGHT' });
+  return {
+    total: summary.total,
+    passed: summary.passed ?? summary.pass,
+    failed: summary.failed ?? summary.fail,
+    skipped: summary.skipped ?? summary.skip,
+    details: summary.details,
     config: report?.config ? {
       rootDir: report.config.rootDir,
       workers: report.config.workers,
@@ -459,6 +510,7 @@ async function tick() {
 async function start() {
   await fs.mkdir(artifactRoot, { recursive: true });
   await fs.mkdir(workRoot, { recursive: true });
+  prepareIsPlaywrightOnBoot();
   await pool.query(
     `UPDATE runs SET status='ERROR',logs=coalesce(logs,'') || E'\nRunner heartbeat expired.',completed_at=now(),updated_at=now()
       WHERE status='RUNNING' AND last_heartbeat_at < now() - interval '3 minutes'`,

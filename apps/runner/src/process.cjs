@@ -76,6 +76,207 @@ function localPlaywrightCli(cwd) {
   return fs.existsSync(cli) ? cli : null;
 }
 
+/** Walk cwd → parents for nested + monorepo @playwright/test installs. */
+function findPlaywrightInstalls(startDir) {
+  const found = [];
+  let dir = path.resolve(startDir || process.cwd());
+  for (;;) {
+    const cli = path.join(dir, 'node_modules', '@playwright', 'test', 'cli.js');
+    if (fs.existsSync(cli)) found.push({ root: dir, cli });
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return found;
+}
+
+/**
+ * Prefer a single Playwright copy. Nested scripts/e2e + monorepo root both shipping
+ * @playwright/test causes "Requiring @playwright/test second time" when specs import
+ * shared helpers outside the e2e package (Node resolves the ancestor install).
+ *
+ * Strategy: keep the outermost (monorepo) install — that is what `_shared` resolves —
+ * and temporarily stash nested pack copies for the duration of the run.
+ */
+function resolvePlaywrightInstall(cwd) {
+  const installs = findPlaywrightInstalls(cwd);
+  if (!installs.length) {
+    return {
+      cli: PLAYWRIGHT_CLI,
+      root: path.dirname(path.dirname(path.dirname(PLAYWRIGHT_CLI))),
+      dual: false,
+      requirePath: path.dirname(require.resolve('@playwright/test/package.json')),
+      stashRoots: [],
+    };
+  }
+  const chosen = installs[installs.length - 1];
+  return {
+    cli: chosen.cli,
+    root: chosen.root,
+    dual: installs.length > 1,
+    requirePath: path.join(chosen.root, 'node_modules', '@playwright', 'test'),
+    installs,
+    stashRoots: installs.length > 1
+      ? installs.slice(0, -1).map(item => item.root)
+      : [],
+  };
+}
+
+/**
+ * ESM loaders ignore a CJS resolve hook, so when dual installs exist we temporarily
+ * rename nested playwright packages for the duration of the run.
+ */
+function writePlaywrightDualLauncher(workspace, install) {
+  const dir = workspace && fs.existsSync(workspace) ? workspace : os.tmpdir();
+  const file = path.join(dir, 'automation-playwright-launch.cjs');
+  fs.writeFileSync(file, `'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const KEEP = ${JSON.stringify(install.root)};
+const STASH_ROOTS = ${JSON.stringify(install.stashRoots || [])};
+const CLI = ${JSON.stringify(install.cli)};
+const SUFFIX = '.__automation_pw_stash';
+
+function stash() {
+  const moved = [];
+  for (const root of STASH_ROOTS) {
+    if (path.resolve(root) === path.resolve(KEEP)) continue;
+    for (const name of ['playwright', '@playwright']) {
+      const from = path.join(root, 'node_modules', name);
+      if (!fs.existsSync(from)) continue;
+      const to = from + SUFFIX;
+      try {
+        if (fs.existsSync(to)) fs.rmSync(to, { recursive: true, force: true });
+        fs.renameSync(from, to);
+        moved.push([to, from]);
+      } catch (error) {
+        console.error('[automation-playwright] stash failed:', from, error && error.message);
+      }
+    }
+  }
+  return moved;
+}
+
+function restore(moved) {
+  for (const [from, to] of [...moved].reverse()) {
+    try {
+      if (fs.existsSync(to)) fs.rmSync(to, { recursive: true, force: true });
+      if (fs.existsSync(from)) fs.renameSync(from, to);
+    } catch {
+      /* best-effort restore */
+    }
+  }
+}
+
+const moved = stash();
+let status = 1;
+try {
+  const result = spawnSync(process.execPath, [CLI, ...process.argv.slice(2)], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: 'inherit',
+  });
+  status = result.status == null ? 1 : result.status;
+} finally {
+  restore(moved);
+}
+process.exit(status);
+`, 'utf8');
+  return file;
+}
+
+function playwrightNodeArgs(install, workspace) {
+  if (install.dual && (install.stashRoots || []).length) {
+    return [writePlaywrightDualLauncher(workspace, install)];
+  }
+  return [install.cli];
+}
+
+/**
+ * Checklist specs import `test/doc/_shared/*.ts` with named ESM imports. If that folder
+ * lacks `"type":"module"`, Playwright transforms the helpers as CJS and Node throws
+ * "Named export … is a CommonJS module".
+ */
+function ensureSharedEsmPackage(e2eRoot) {
+  if (!e2eRoot) return null;
+  let dir = path.resolve(e2eRoot);
+  for (let i = 0; i < 10; i += 1) {
+    const nested = path.join(dir, '_shared', 'e2e-checklist-helpers.ts');
+    const here = path.join(dir, 'e2e-checklist-helpers.ts');
+    const sharedDir = fs.existsSync(nested)
+      ? path.join(dir, '_shared')
+      : (fs.existsSync(here) ? dir : null);
+    if (sharedDir) {
+      const pkgPath = path.join(sharedDir, 'package.json');
+      if (!fs.existsSync(pkgPath)) {
+        fs.writeFileSync(pkgPath, `${JSON.stringify({
+          name: '@qa/doc-shared',
+          private: true,
+          type: 'module',
+        }, null, 2)}\n`, 'utf8');
+        return pkgPath;
+      }
+      try {
+        const data = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (data.type !== 'module') {
+          data.type = 'module';
+          fs.writeFileSync(pkgPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+        }
+      } catch {
+        /* leave existing file */
+      }
+      return pkgPath;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+const PW_STASH_SUFFIX = '.__automation_pw_stash';
+
+/** Undo leftover dual-install stashes from a crashed/killed Playwright run. */
+function restoreAutomationPlaywrightStashes(nodeModulesDir) {
+  if (!nodeModulesDir || !fs.existsSync(nodeModulesDir)) return [];
+  const restored = [];
+  for (const name of ['playwright', '@playwright']) {
+    const live = path.join(nodeModulesDir, name);
+    const stash = live + PW_STASH_SUFFIX;
+    if (!fs.existsSync(stash)) continue;
+    try {
+      if (!fs.existsSync(live)) {
+        fs.renameSync(stash, live);
+        restored.push(live);
+      } else {
+        fs.rmSync(stash, { recursive: true, force: true });
+        restored.push(stash);
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+  return restored;
+}
+
+/**
+ * Idempotent boot/prepare for IS QA Playwright: shared ESM package + stash cleanup.
+ * Safe to call when IS_ROOT is missing (no-op).
+ */
+function prepareIsPlaywrightRuntime({ docRoot, e2eRoots = [] } = {}) {
+  const result = { sharedPackage: null, restored: [] };
+  if (docRoot) {
+    result.sharedPackage = ensureSharedEsmPackage(docRoot)
+      || ensureSharedEsmPackage(path.join(docRoot, '_shared'));
+  }
+  for (const e2e of e2eRoots.filter(Boolean)) {
+    if (!result.sharedPackage) result.sharedPackage = ensureSharedEsmPackage(e2e);
+    result.restored.push(...restoreAutomationPlaywrightStashes(path.join(e2e, 'node_modules')));
+  }
+  return result;
+}
+
 function resolveBin(bin) {
   const name = String(bin || '');
   if (!name || name === 'node' || name === 'node.exe') {
@@ -208,6 +409,7 @@ module.exports = defineConfig({
     locale: 'fa-IR',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    storageState: process.env.E2E_STORAGE_STATE_PARENT || process.env.E2E_STORAGE_STATE || undefined,
     ${channel ? `channel: ${JSON.stringify(channel)},` : chrome ? `launchOptions: { executablePath: ${JSON.stringify(chrome)} },` : ''}
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
@@ -217,6 +419,7 @@ module.exports = defineConfig({
 
 function playwrightJob({ cwd, specPath, workspace, baseURL, headed }) {
   const e2eCwd = cwd && fs.existsSync(cwd) ? cwd : (specPath ? path.dirname(specPath) : process.cwd());
+  ensureSharedEsmPackage(e2eCwd);
   const envExtra = {
     PW_CHANNEL: process.env.PW_CHANNEL || browserChannel(chromePath()) || 'chrome',
   };
@@ -230,18 +433,15 @@ function playwrightJob({ cwd, specPath, workspace, baseURL, headed }) {
     testDir = path.dirname(path.resolve(specPath));
     specFile = path.basename(specPath);
   }
-  const localCli = localPlaywrightCli(e2eCwd);
-  const cli = localCli || PLAYWRIGHT_CLI;
-  const playwrightRequire = localCli
-    ? path.join(e2eCwd, 'node_modules', '@playwright', 'test')
-    : path.dirname(require.resolve('@playwright/test/package.json'));
+  const install = resolvePlaywrightInstall(e2eCwd);
+  const playwrightRequire = install.requirePath;
   fs.writeFileSync(configPath, writePlaywrightConfig({
     testDir, specFile, baseURL, headed, jsonFile, playwrightRequire,
   }), 'utf8');
   return {
     command: process.execPath,
-    args: [cli, 'test', '--config', configPath],
-    cwd: localCli ? e2eCwd : dir,
+    args: [...playwrightNodeArgs(install, dir), 'test', '--config', configPath],
+    cwd: localPlaywrightCli(e2eCwd) ? e2eCwd : dir,
     envExtra,
     jsonFile,
     configPath,
@@ -266,10 +466,12 @@ function findRepoPlaywrightConfig(root) {
 }
 
 function playwrightRepoJob({ sourceRoot, specPath, workspace }) {
+  ensureSharedEsmPackage(sourceRoot);
+  restoreAutomationPlaywrightStashes(path.join(sourceRoot, 'node_modules'));
   const config = findRepoPlaywrightConfig(sourceRoot);
   const jsonFile = path.join(workspace && fs.existsSync(workspace) ? workspace : os.tmpdir(), 'playwright-results.json');
-  const cli = localPlaywrightCli(sourceRoot) || PLAYWRIGHT_CLI;
-  const args = [cli, 'test', '--config', config];
+  const install = resolvePlaywrightInstall(sourceRoot);
+  const args = [...playwrightNodeArgs(install, workspace), 'test', '--config', config];
   if (specPath && fs.existsSync(specPath)) {
     args.push(path.relative(sourceRoot, specPath).replace(/\\/g, '/'));
   }
@@ -307,6 +509,11 @@ module.exports = {
   playwrightJob,
   playwrightRepoJob,
   findRepoPlaywrightConfig,
+  findPlaywrightInstalls,
+  resolvePlaywrightInstall,
+  ensureSharedEsmPackage,
+  restoreAutomationPlaywrightStashes,
+  prepareIsPlaywrightRuntime,
   ensureNpmInstall,
   unitJob,
   npmCliJs,
