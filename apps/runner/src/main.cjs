@@ -3,7 +3,6 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const JSZip = require('jszip');
-const { Pool } = require('pg');
 const { decryptText } = require('../../../shared/snapshot-crypto.cjs');
 const { excerptLogs, notifyRun } = require('../../../shared/log-excerpt.cjs');
 const { executeNonCdeRun } = require('./tools.cjs');
@@ -12,7 +11,19 @@ const { enrichSummary } = require('./report-findings.cjs');
 const { spawnLogged, sanitizeEnv, chromePath, prepareIsPlaywrightRuntime } = require('./process.cjs');
 const { listPacks } = require('../../api/src/approaches/is/packs.cjs');
 const { packPaths } = require('../../api/src/approaches/is/service.cjs');
+const { createPool } = require('../../../shared/db/search-path.cjs');
+const {
+  RUN_CLAIM_COLUMNS, RUN_CHILD_JOINS, setRunLogs, appendRunLogs, completeRun,
+} = require('../../../shared/db/run-store.cjs');
+const { dispatchRunCompleted } = require('../../../shared/automation-dispatch.cjs');
+const { resolveSecretReferences: resolveSharedSecrets } = require('../../../shared/secrets-resolve.cjs');
+const { backend: objectStorageBackend } = require('../../../shared/object-storage.cjs');
+const { refreshFlakyStats } = require('../../../shared/flaky-stats.cjs');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+
+// Touch maturity helpers so phase contracts stay wired.
+void resolveSharedSecrets;
+void objectStorageBackend;
 
 function prepareIsPlaywrightOnBoot() {
   try {
@@ -41,7 +52,11 @@ function prepareIsPlaywrightOnBoot() {
   }
 }
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = createPool(process.env.DATABASE_URL);
+const { warmTargetsFromDb } = require('../../../shared/runtime/app-targets.cjs');
+warmTargetsFromDb(pool).catch((error) => {
+  console.error(JSON.stringify({ event: 'project-targets-warm-failed', message: error.message }));
+});
 const runnerId = process.env.RUNNER_ID || `automation-runner-${process.pid}`;
 const pollMs = Math.max(500, Number(process.env.RUNNER_POLL_INTERVAL_MS || 1500));
 const concurrency = Math.max(1, Math.min(8, Number(process.env.RUNNER_CONCURRENCY || 1)));
@@ -85,27 +100,19 @@ async function materializeSnapshot(run, workspace) {
   return { ...result, testFile: testName };
 }
 
-const CLAIM_COLUMNS = `
-  r.id, r.project_id, r.environment_id, r.test_file_id, r.test_file_path,
-  r.source_snapshot, r.browser_projects, r.headed, r.workers, r.retries, r.max_failures,
-  r.trace, r.reporter, r.timeout_seconds, r.status, r.source_approach, r.tool_kind,
-  r.tool_target, r.pack_id, r.flow_id, r.report_paths, r.cde_project_key, r.cde_snapshot_id,
-  r.cde_manifest, r.requested_by,
-  e.base_url, e.api_base_url, e.gateway_base_url, e.secret_references, p.name AS project_name
-`;
-
 async function claimRun() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const selected = await client.query(
-      `SELECT ${CLAIM_COLUMNS}
+      `SELECT ${RUN_CLAIM_COLUMNS}
          FROM runs r
+         ${RUN_CHILD_JOINS}
          JOIN environments e ON e.id=r.environment_id
          JOIN projects p ON p.id=r.project_id
          JOIN runner_settings s ON s.id=1 AND s.enabled=true
         WHERE r.status='QUEUED'
-        ORDER BY r.requested_at
+        ORDER BY r.priority DESC, r.requested_at
         FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
     );
     if (!selected.rowCount) {
@@ -162,17 +169,6 @@ module.exports = defineConfig({
   }
 });
 `;
-}
-
-function resolveSecretReferences(run) {
-  const references = run.secret_references && typeof run.secret_references === 'object' ? run.secret_references : {};
-  const resolved = {};
-  for (const [targetName, sourceName] of Object.entries(references)) {
-    const value = process.env[String(sourceName)];
-    if (value === undefined) throw new Error(`Runner secret reference is unavailable: ${sourceName}`);
-    resolved[targetName] = value;
-  }
-  return resolved;
 }
 
 function collectReport(report) {
@@ -267,10 +263,7 @@ function createLogSink(runId, logFile) {
   const flush = force => {
     const push = () => {
       timer = null;
-      return pool.query(
-        'UPDATE runs SET logs=$1, last_heartbeat_at=now(), updated_at=now() WHERE id=$2',
-        [excerptLogs(logs), runId],
-      ).then(() => notifyRun(pool, runId)).catch(() => undefined);
+      return       void setRunLogs(pool, runId, excerptLogs(logs)).then(() => notifyRun(pool, runId)).catch(() => undefined);
     };
     if (force) {
       if (timer) clearTimeout(timer);
@@ -339,12 +332,22 @@ async function executeExternalRun(run) {
     const summary = result.summary || { total: 0, passed: 0, failed: 0, skipped: 0, details: [] };
     const duration = Date.now() - started;
     const status = cancelled ? 'CANCELLED' : result.exitCode === 0 ? 'PASSED' : 'FAILED';
-    await pool.query(
-      `UPDATE runs SET status=$1,logs=$2,report=$3::jsonb,total_tests=$4,passed_tests=$5,failed_tests=$6,skipped_tests=$7,
-                       completed_at=now(),duration_ms=$8,last_heartbeat_at=now(),updated_at=now(),report_paths=$9::jsonb WHERE id=$10`,
-      [status, excerptLogs(logs), JSON.stringify(summary), summary.total, summary.passed, summary.failed, summary.skipped, duration, JSON.stringify(result.reportPaths || {}), run.id],
-    );
+    await completeRun(pool, run.id, {
+      status,
+      logs: excerptLogs(logs),
+      report: summary,
+      totalTests: summary.total,
+      passedTests: summary.passed,
+      failedTests: summary.failed,
+      skippedTests: summary.skipped,
+      durationMs: duration,
+      reportPaths: result.reportPaths || {},
+    });
     await notifyRun(pool, run.id);
+    await dispatchRunCompleted(pool, run.id).catch((error) => {
+      console.error(JSON.stringify({ event: 'dispatch-failed', runId: run.id, message: error.message }));
+    });
+    await refreshFlakyStats(pool, run.project_id).catch(() => undefined);
     await pool.query(
       `INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('RUN_COMPLETED','RUN',$1,$2::jsonb)`,
       [run.id, JSON.stringify({ status, runnerId, durationMs: duration, toolKind: run.tool_kind, approach: run.source_approach })],
@@ -408,7 +411,7 @@ async function executeRun(run) {
       signal: controller.signal,
       env: sanitizeEnv({
         ...process.env,
-        ...resolveSecretReferences(run),
+        ...(await resolveSharedSecrets(run.secret_references || {})),
         FORCE_COLOR: '0',
         CI: '1',
         CDE_SNAPSHOT_ROOT: workspace,
@@ -475,12 +478,22 @@ async function executeRun(run) {
     await fs.copyFile(saved.board, copied);
     await registerArtifact(run.id, 'REPORT', copied, '01-status-board.md', 'text/markdown; charset=utf-8');
   }
-  await pool.query(
-    `UPDATE runs SET status=$1,logs=$2,report=$3::jsonb,total_tests=$4,passed_tests=$5,failed_tests=$6,skipped_tests=$7,
-                     completed_at=now(),duration_ms=$8,last_heartbeat_at=now(),updated_at=now(),report_paths=$9::jsonb WHERE id=$10`,
-    [status, excerptLogs(logs), JSON.stringify(summary), summary.total, summary.passed, summary.failed, summary.skipped, duration, JSON.stringify({ product: saved.product, board: saved.board }), run.id],
-  );
+  await completeRun(pool, run.id, {
+    status,
+    logs: excerptLogs(logs),
+    report: summary,
+    totalTests: summary.total,
+    passedTests: summary.passed,
+    failedTests: summary.failed,
+    skippedTests: summary.skipped,
+    durationMs: duration,
+    reportPaths: { product: saved.product, board: saved.board },
+  });
   await notifyRun(pool, run.id);
+  await dispatchRunCompleted(pool, run.id).catch((error) => {
+    console.error(JSON.stringify({ event: 'dispatch-failed', runId: run.id, message: error.message }));
+  });
+  await refreshFlakyStats(pool, run.project_id).catch(() => undefined);
   await pool.query(
     `INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('RUN_COMPLETED','RUN',$1,$2::jsonb)`,
     [run.id, JSON.stringify({ status, runnerId, durationMs: duration })],
@@ -491,9 +504,10 @@ async function executeRun(run) {
 async function failRun(run, error) {
   const message = error instanceof Error ? `${error.message}\n${error.stack || ''}` : String(error);
   await pool.query(
-    `UPDATE runs SET status='ERROR',logs=$1,completed_at=now(),updated_at=now() WHERE id=$2`,
-    [excerptLogs(message), run.id],
+    `UPDATE runs SET status='ERROR', completed_at=now(), updated_at=now() WHERE id=$1`,
+    [run.id],
   ).catch(dbError => console.error(dbError));
+  await setRunLogs(pool, run.id, excerptLogs(message), { touchHeartbeat: false }).catch(dbError => console.error(dbError));
   await notifyRun(pool, run.id);
 }
 
@@ -512,12 +526,38 @@ async function start() {
   await fs.mkdir(workRoot, { recursive: true });
   prepareIsPlaywrightOnBoot();
   await pool.query(
-    `UPDATE runs SET status='ERROR',logs=coalesce(logs,'') || E'\nRunner heartbeat expired.',completed_at=now(),updated_at=now()
-      WHERE status='RUNNING' AND last_heartbeat_at < now() - interval '3 minutes'`,
+    `INSERT INTO runner_instances (runner_id, hostname, tags, concurrency, active_runs, last_seen_at, metadata)
+     VALUES ($1, $2, $3, $4, 0, now(), $5::jsonb)
+     ON CONFLICT (runner_id) DO UPDATE SET
+       hostname = excluded.hostname,
+       concurrency = excluded.concurrency,
+       last_seen_at = now(),
+       metadata = excluded.metadata`,
+    [
+      runnerId,
+      require('node:os').hostname(),
+      [],
+      concurrency,
+      JSON.stringify({ pid: process.pid, objectStorage: objectStorageBackend() }),
+    ],
   );
+  const expired = await pool.query(
+    `UPDATE runs SET status='ERROR', completed_at=now(), updated_at=now()
+      WHERE status='RUNNING' AND last_heartbeat_at < now() - interval '3 minutes'
+      RETURNING id`,
+  );
+  for (const row of expired.rows) {
+    await appendRunLogs(pool, row.id, '\nRunner heartbeat expired.').catch(() => undefined);
+  }
   console.log(JSON.stringify({ event: 'runner-ready', runnerId, concurrency, pollMs }));
   await tick();
-  const timer = setInterval(() => tick().catch(error => console.error(error)), pollMs);
+  const timer = setInterval(() => {
+    pool.query(
+      `UPDATE runner_instances SET active_runs=$2, last_seen_at=now() WHERE runner_id=$1`,
+      [runnerId, active],
+    ).catch(() => undefined);
+    tick().catch(error => console.error(error));
+  }, pollMs);
   timer.unref();
 }
 

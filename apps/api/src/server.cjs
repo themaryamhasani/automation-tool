@@ -3,18 +3,30 @@ const argon2 = require('argon2');
 const express = require('express');
 const helmet = require('helmet');
 const { rateLimit } = require('express-rate-limit');
-const { Pool } = require('pg');
 const { registerCdeRoutes } = require('./cde/service.cjs');
 const { registerApproachRoutes } = require('./approaches/routes.cjs');
 const { isApproach } = require('./approaches/constants.cjs');
 const { tokenFromRequest, sessionCookie, clearSessionCookie } = require('../../../shared/session-cookie.cjs');
+const { createPool } = require('../../../shared/db/search-path.cjs');
 const { startRunEventBus } = require('./runs/events.cjs');
 const { registerRunRoutes } = require('./runs/routes.cjs');
 const { registerReportRoutes } = require('./reports/routes.cjs');
+const { registerRuntimeRoutes } = require('./runtime/service.cjs');
+const { registerAutomationRoutes } = require('./automation/routes.cjs');
+const { registerAnalyticsRoutes } = require('./analytics/routes.cjs');
+const { registerPlatformDocRoutes } = require('./platform/routes.cjs');
+const { registerGateRoutes } = require('./gates/routes.cjs');
+const { registerOpsRoutes } = require('./ops/routes.cjs');
+const { startScheduler } = require('./automation/scheduler.cjs');
+const { startRetentionWorker } = require('./retention/worker.cjs');
 const { loadCdeProjectContext } = require('./cde/project-context.cjs');
 const { ApiError, asyncRoute, camelRow, cleanText, parsePositiveInt, pagination, paged } = require('./http.cjs');
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = createPool(process.env.DATABASE_URL);
+const { warmTargetsFromDb } = require('../../../shared/runtime/app-targets.cjs');
+warmTargetsFromDb(pool).catch((error) => {
+  console.error(JSON.stringify({ event: 'project-targets-warm-failed', message: error.message }));
+});
 const SESSION_TTL_HOURS = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 24));
 const FILE_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.spec\.(?:ts|js)|\.test\.(?:ts|js)|\.js)$/;
 const FOLDER_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
@@ -168,6 +180,14 @@ function createServer() {
   app.use('/api', asyncRoute(authenticate));
   registerCdeRoutes(app, { pool, audit, ensureProjectAccess });
   registerApproachRoutes(app, { pool, audit, ensureProjectAccess });
+  registerRuntimeRoutes(app, { pool, audit, ensureProjectAccess });
+  registerAutomationRoutes(app, { pool, audit, ensureProjectAccess });
+  registerAnalyticsRoutes(app, { pool, ensureProjectAccess });
+  registerPlatformDocRoutes(app);
+  registerGateRoutes(app, { pool, audit, ensureProjectAccess });
+  const retentionWorker = startRetentionWorker(pool);
+  registerOpsRoutes(app, { pool, retentionWorker });
+  startScheduler(pool);
 
   app.get('/api/auth/me', asyncRoute(async (req, res) => {
     const projects = await pool.query(
@@ -206,11 +226,14 @@ function createServer() {
     const params = [];
     const access = req.user.role === 'ADMIN' ? '' : 'JOIN user_projects up ON up.project_id = p.id AND up.user_id = $1';
     if (req.user.role !== 'ADMIN') params.push(req.user.id);
+    const includeWorkspace = String(req.query?.includeWorkspace || '') === '1';
+    const kindFilter = includeWorkspace ? '' : " AND p.kind = 'NAMED'";
     const result = await pool.query(
       `SELECT p.*, count(DISTINCT e.id)::int AS environment_count, count(DISTINCT f.id)::int AS file_count
          FROM projects p ${access}
          LEFT JOIN environments e ON e.project_id = p.id
          LEFT JOIN test_files f ON f.project_id = p.id
+        WHERE true${kindFilter}
         GROUP BY p.id ORDER BY p.is_active DESC, p.name`,
       params,
     );
@@ -223,8 +246,9 @@ function createServer() {
     const sourceApproach = isApproach(String(req.body?.sourceApproach || 'CDE').toUpperCase())
       ? String(req.body?.sourceApproach || 'CDE').toUpperCase() : 'CDE';
     if (!name || !/^[a-z0-9][a-z0-9_-]*$/.test(code)) throw new ApiError(422, 'INVALID_PROJECT', 'نام و کد انگلیسی معتبر وارد کنید.');
+    if (/^ws-/.test(code)) throw new ApiError(422, 'WORKSPACE_CODE_RESERVED', 'کدهای ws-* برای فضای کار سیستمی رزرو شده‌اند.');
     const result = await pool.query(
-      `INSERT INTO projects (name, code, description, source_approach) VALUES ($1, $2, $3, $4) RETURNING *`,
+      `INSERT INTO projects (name, code, description, source_approach, kind) VALUES ($1, $2, $3, $4, 'NAMED') RETURNING *`,
       [name, code, cleanText(req.body?.description, 5000) || null, sourceApproach],
     );
     await audit(pool, req.user.id, 'PROJECT_CREATED', 'PROJECT', result.rows[0].id);
@@ -237,9 +261,15 @@ function createServer() {
     const sourceApproach = isApproach(String(req.body?.sourceApproach || 'CDE').toUpperCase())
       ? String(req.body?.sourceApproach || 'CDE').toUpperCase() : 'CDE';
     if (!name || !/^[a-z0-9][a-z0-9_-]*$/.test(code)) throw new ApiError(422, 'INVALID_PROJECT', 'نام و کد انگلیسی معتبر وارد کنید.');
+    const existing = await pool.query('SELECT id, kind FROM projects WHERE id=$1', [req.params.id]);
+    if (!existing.rowCount) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'پروژه پیدا نشد.');
+    if (existing.rows[0].kind === 'WORKSPACE') {
+      throw new ApiError(409, 'WORKSPACE_PROJECT_READONLY', 'پروژه‌های فضای کار سیستمی از این مسیر ویرایش نمی‌شوند.');
+    }
+    if (/^ws-/.test(code)) throw new ApiError(422, 'WORKSPACE_CODE_RESERVED', 'کدهای ws-* برای فضای کار سیستمی رزرو شده‌اند.');
     const result = await pool.query(
-      `UPDATE projects SET name=$1, code=$2, description=$3, is_active=$4, source_approach=$5, updated_at=now()
-        WHERE id=$6 RETURNING *`,
+      `UPDATE projects SET name=$1, code=$2, description=$3, is_active=$4, source_approach=$5, kind='NAMED', updated_at=now()
+        WHERE id=$6 AND kind='NAMED' RETURNING *`,
       [name, code, cleanText(req.body?.description, 5000) || null, req.body?.isActive !== false, sourceApproach, req.params.id],
     );
     if (!result.rowCount) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'پروژه پیدا نشد.');
@@ -248,8 +278,11 @@ function createServer() {
   }));
 
   app.delete('/api/projects/:id', requireRole('ADMIN'), asyncRoute(async (req, res) => {
-    const existing = await pool.query('SELECT id, name, is_active FROM projects WHERE id=$1', [req.params.id]);
+    const existing = await pool.query('SELECT id, name, is_active, kind FROM projects WHERE id=$1', [req.params.id]);
     if (!existing.rowCount) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'پروژه پیدا نشد.');
+    if (existing.rows[0].kind === 'WORKSPACE') {
+      throw new ApiError(409, 'WORKSPACE_PROJECT_READONLY', 'پروژه‌های فضای کار سیستمی حذف نمی‌شوند.');
+    }
     const runCount = await pool.query('SELECT count(*)::int AS total FROM runs WHERE project_id=$1', [req.params.id]);
     if (runCount.rows[0].total > 0) {
       const archived = await pool.query(
@@ -378,9 +411,16 @@ function createServer() {
         params,
       );
       if (!result.rowCount) throw new ApiError(404, 'USER_NOT_FOUND', 'کاربر پیدا نشد.');
-      await client.query('DELETE FROM user_projects WHERE user_id=$1', [req.params.id]);
+      await client.query(
+        `DELETE FROM user_projects up
+          USING projects p
+         WHERE up.user_id = $1 AND up.project_id = p.id AND p.kind = 'NAMED'`,
+        [req.params.id],
+      );
       const projectIds = Array.isArray(req.body?.projectIds) ? [...new Set(req.body.projectIds)] : [];
       for (const projectId of projectIds) {
+        const kind = await client.query('SELECT kind FROM projects WHERE id = $1', [projectId]);
+        if (!kind.rowCount || kind.rows[0].kind === 'WORKSPACE') continue;
         await client.query('INSERT INTO user_projects (user_id,project_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [req.params.id, projectId]);
       }
       if (!isActive) await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL', [req.params.id]);

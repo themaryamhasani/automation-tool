@@ -537,7 +537,7 @@ function registerCdeRoutes(app, { pool, audit, ensureProjectAccess }) {
   }));
   app.get('/api/cde/mapped-projects', asyncRoute(async (req, res) => {
     const projects = new Set(await accessible(req)); const params = []; const access = req.user.role === 'ADMIN' ? '' : 'JOIN user_projects up ON up.project_id=p.id AND up.user_id=$1'; if (req.user.role !== 'ADMIN') params.push(req.user.id);
-    const rows = await pool.query(`SELECT p.id,p.name,p.code,m.* FROM projects p JOIN cde_project_mappings m ON m.project_id=p.id AND m.enabled=true ${access} WHERE p.is_active=true ORDER BY p.name`, params);
+    const rows = await pool.query(`SELECT p.id,p.name,p.code,m.* FROM projects p JOIN cde_project_mappings m ON m.project_id=p.id AND m.enabled=true ${access} WHERE p.is_active=true AND p.kind='NAMED' ORDER BY p.name`, params);
     res.json(rows.rows.filter(row => projects.has(row.project_key)).map(row => ({ id: row.project_id, name: row.name, code: row.code, projectKey: row.project_key, repositories: { webUi: row.web_ui_repo_name, dataService: row.data_service_repo_name, apiModule: row.api_module_repo_name, messageConsumer: row.message_consumer_repo_name, tests: { provider: 'POSTGRESQL', repoName: row.test_repo_name, packId: row.test_pack_id } } })));
   }));
 }

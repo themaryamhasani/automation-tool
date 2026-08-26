@@ -18,11 +18,15 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint apps/web/src apps/api/src apps/runner/src shared tests scripts",
-    "test": "node --test tests/*.test.cjs",
+    "test": "node scripts/run-tests.cjs",
     "test:ui": "node scripts/ci-ui.cjs",
     "db:setup": "node scripts/db-setup.cjs",
     "db:seed": "node scripts/db-seed.cjs",
     "db:import": "node scripts/import-existing-data.cjs",
+    "db:sync-targets": "node scripts/sync-project-targets.cjs",
+    "seed:pack": "node scripts/seed-cde-pack.cjs",
+    "seed:tavan": "node scripts/seed-tavan-pack.cjs",
+    "seed:medu-camp": "node scripts/seed-medu-camp-pack.cjs",
     "verify": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "dependencies": {

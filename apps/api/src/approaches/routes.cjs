@@ -1,4 +1,5 @@
 const { SOURCE_APPROACHES, TOOL_KINDS, isApproach } = require('./constants.cjs');
+const { getBinding, upsertBinding, serializeBinding } = require('../../../../shared/db/bindings.cjs');
 const isService = require('./is/service.cjs');
 const localPack = require('./local-pack.cjs');
 const gitClient = require('./git/client.cjs');
@@ -38,36 +39,6 @@ async function saveConnection(pool, userId, payload) {
      RETURNING *`,
     [userId, payload.provider, payload.username, payload.displayName, payload.encryptedState, payload.expiresAt],
   );
-  return result.rows[0];
-}
-
-function serializeBinding(row) {
-  if (!row) return null;
-  return {
-    projectId: row.project_id,
-    sourceApproach: row.source_approach,
-    config: row.config || {},
-    lastSyncAt: row.last_sync_at,
-    lastSyncStatus: row.last_sync_status,
-  };
-}
-
-async function getBinding(pool, projectId) {
-  const result = await pool.query('SELECT * FROM project_source_bindings WHERE project_id=$1', [projectId]);
-  return result.rows[0] || null;
-}
-
-async function upsertBinding(pool, projectId, approach, config) {
-  const result = await pool.query(
-    `INSERT INTO project_source_bindings (project_id,source_approach,config,last_sync_at,last_sync_status)
-     VALUES ($1,$2,$3::jsonb,now(),'BOUND')
-     ON CONFLICT (project_id) DO UPDATE SET
-       source_approach=excluded.source_approach, config=excluded.config, last_sync_at=now(),
-       last_sync_status='BOUND', updated_at=now()
-     RETURNING *`,
-    [projectId, approach, JSON.stringify(config || {})],
-  );
-  await pool.query('UPDATE projects SET source_approach=$1, updated_at=now() WHERE id=$2', [approach, projectId]);
   return result.rows[0];
 }
 

@@ -5,6 +5,7 @@ const { compileDataServicePackage, normalizeSourcePath } = require('./data-servi
 const { encryptText } = require('../../../../shared/snapshot-crypto.cjs');
 const { shouldKeepRuntimePackage, savedIdsFor } = require('./snapshot-focus.cjs');
 const { excerptLogs, notifyRun } = require('../../../../shared/log-excerpt.cjs');
+const { setRunLogs, setRunSourceManifest } = require('../../../../shared/db/run-store.cjs');
 
 const REPOSITORIES = {
   WEB_UI: { column: 'web_ui_repo_name', key: 'cde/repository/web-ui/list/fetch', root: 'web-ui' },
@@ -66,10 +67,7 @@ async function reportProgress(pool, snapshot, info) {
     `UPDATE cde_source_snapshots SET manifest = coalesce(manifest,'{}'::jsonb) || $1::jsonb, updated_at=now() WHERE id=$2`,
     [JSON.stringify(patch), snapshot.id],
   );
-  await pool.query(
-    `UPDATE runs SET logs=$1, updated_at=now() WHERE id=$2 AND status='PREPARING'`,
-    [excerptLogs(message), snapshot.run_id],
-  );
+  await setRunLogs(pool, snapshot.run_id, excerptLogs(message), { touchHeartbeat: false });
   await notifyRun(pool, snapshot.run_id);
 }
 
@@ -250,10 +248,7 @@ async function claim(pool) {
     );
     if (!result.rowCount) { await client.query('COMMIT'); return null; }
     await client.query("UPDATE cde_source_snapshots SET status='MATERIALIZING',updated_at=now() WHERE id=$1", [result.rows[0].id]);
-    await client.query(
-      "UPDATE runs SET logs=$1, updated_at=now() WHERE id=$2 AND status='PREPARING'",
-      ['در حال دریافت سورس از CDE. این مرحله خطا نیست و معمولاً حدود یک دقیقه طول می‌کشد.', result.rows[0].run_id],
-    );
+    await setRunLogs(client, result.rows[0].run_id, 'در حال دریافت سورس از CDE. این مرحله خطا نیست و معمولاً حدود یک دقیقه طول می‌کشد.', { touchHeartbeat: false });
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -280,17 +275,15 @@ async function complete(pool, snapshot, bundle) {
         params,
       );
       if (index === 0 || index + chunkSize >= bundle.files.length || index % 200 === 0) {
-        await client.query(
-          "UPDATE runs SET logs=$1, updated_at=now() WHERE id=$2 AND status='PREPARING'",
-          [`در حال ذخیره Snapshot: ${Math.min(index + chunk.length, bundle.files.length)} از ${bundle.files.length} فایل`, snapshot.run_id],
-        );
+        await setRunLogs(client, snapshot.run_id, `در حال ذخیره Snapshot: ${Math.min(index + chunk.length, bundle.files.length)} از ${bundle.files.length} فایل`, { touchHeartbeat: false });
       }
     }
     await client.query(
       `UPDATE cde_source_snapshots SET status='READY',manifest=$1::jsonb,content_hash=$2,file_count=$3,initiating_session_id=NULL,error_code=NULL,error_message=NULL,updated_at=now() WHERE id=$4`,
       [JSON.stringify(bundle.manifest), bundle.contentHash, bundle.files.length, snapshot.id],
     );
-    await client.query("UPDATE runs SET status='QUEUED',cde_manifest=$1::jsonb,updated_at=now() WHERE id=$2 AND status='PREPARING'", [JSON.stringify(bundle.manifest), snapshot.run_id]);
+    await client.query("UPDATE runs SET status='QUEUED', updated_at=now() WHERE id=$1 AND status='PREPARING'", [snapshot.run_id]);
+    await setRunSourceManifest(client, snapshot.run_id, bundle.manifest);
     await client.query("INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('CDE_SNAPSHOT_READY','RUN',$1,$2::jsonb)", [snapshot.run_id, JSON.stringify({ snapshotId: snapshot.id, contentHash: bundle.contentHash, fileCount: bundle.files.length })]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -301,11 +294,14 @@ async function fail(pool, snapshot, error) {
   const code = String(error.code || 'CDE_SNAPSHOT_FAILED').slice(0, 120);
   const message = String(error.message || 'ساخت Snapshot CDE ناموفق بود.').slice(0, 4000);
   await pool.query(
-    `WITH failed AS (
-       UPDATE cde_source_snapshots SET status='FAILED',error_code=$1,error_message=$2,updated_at=now() WHERE id=$3
-     ) UPDATE runs SET status='ERROR',logs=$4,completed_at=now(),updated_at=now() WHERE id=$5 AND status='PREPARING'`,
-    [code, message, snapshot.id, `CDE snapshot failed [${code}]: ${message}`, snapshot.run_id],
+    `UPDATE cde_source_snapshots SET status='FAILED',error_code=$1,error_message=$2,updated_at=now() WHERE id=$3`,
+    [code, message, snapshot.id],
   );
+  await pool.query(
+    `UPDATE runs SET status='ERROR',completed_at=now(),updated_at=now() WHERE id=$1 AND status='PREPARING'`,
+    [snapshot.run_id],
+  );
+  await setRunLogs(pool, snapshot.run_id, `CDE snapshot failed [${code}]: ${message}`, { touchHeartbeat: false });
 }
 
 function startCdeSnapshotWorker(pool) {

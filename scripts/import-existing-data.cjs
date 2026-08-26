@@ -2,6 +2,8 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const argon2 = require('argon2');
 const { Client } = require('pg');
+const { applySearchPath } = require('../shared/db/search-path.cjs');
+const { ensureRunChildren } = require('../shared/db/run-store.cjs');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const sourceUrl = process.env.SOURCE_DATABASE_URL || 'postgresql://postgres:1234@localhost:5432/UTMS?schema=public';
@@ -31,6 +33,7 @@ async function main() {
   const target = new Client({ connectionString: targetUrl });
   await source.connect();
   await target.connect();
+  await applySearchPath(target);
 
   async function mapped(type, sourceId) {
     if (!sourceId) return null;
@@ -204,15 +207,34 @@ async function main() {
     const sourceSnapshot = snapshotsById.get(run.snapshot_id);
     const projectMapping = (await target.query('SELECT project_key FROM cde_project_mappings WHERE project_id=$1', [projectId])).rows[0];
     await target.query(
-      `INSERT INTO runs (id,project_id,environment_id,test_file_id,test_file_path,source_snapshot,browser_projects,headed,workers,retries,max_failures,trace,reporter,timeout_seconds,status,runner_id,command,logs,report,total_tests,passed_tests,failed_tests,skipped_tests,requested_by,requested_at,started_at,completed_at,duration_ms,last_heartbeat_at,cde_project_key,cde_manifest,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31::jsonb,$32,$33)`,
-      [targetId, projectId, environmentId, testFileId, run.test_file_path, file.rows[0]?.source_code || '// Historical run: source snapshot was unavailable.',
-        parseArray(run.projects).filter(item => ['chromium', 'firefox', 'webkit'].includes(item)), run.headed, Math.max(1, Number(run.workers) || 1), Math.max(0, Number(run.retries) || 0),
-        run.max_failures === 'unlimited' ? null : Number(run.max_failures) || null, run.trace || 'retain-on-failure', ['json', 'html', 'junit'].includes(run.reporter) ? run.reporter : 'json',
-        Number(run.timeout_seconds) || 120, importedRunStatus(run.status), run.runner_id, run.command, run.logs, run.report ? JSON.stringify(run.report) : null,
+      `INSERT INTO runs (
+          id,project_id,environment_id,test_file_id,test_file_path,status,runner_id,command,
+          total_tests,passed_tests,failed_tests,skipped_tests,requested_by,requested_at,started_at,completed_at,
+          duration_ms,last_heartbeat_at,cde_project_key,source_approach,tool_kind,created_at,updated_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'CDE','PLAYWRIGHT',$20,$21)`,
+      [targetId, projectId, environmentId, testFileId, run.test_file_path,
+        importedRunStatus(run.status), run.runner_id, run.command,
         run.total_tests, run.passed_tests, run.failed_tests, run.skipped_tests, requestedBy, run.requested_at || run.created_at, run.started_at, run.completed_at || run.updated_at,
-        run.duration, run.last_heartbeat_at, projectMapping?.project_key || null, JSON.stringify(sourceSnapshot?.manifest || { importedSnapshot: sourceSnapshot || null }), run.created_at, run.updated_at],
+        run.duration, run.last_heartbeat_at, projectMapping?.project_key || null, run.created_at, run.updated_at],
     );
+    await ensureRunChildren(target, targetId, {
+      request: {
+        browser_projects: parseArray(run.projects).filter(item => ['chromium', 'firefox', 'webkit'].includes(item)),
+        headed: run.headed,
+        workers: Math.max(1, Number(run.workers) || 1),
+        retries: Math.max(0, Number(run.retries) || 0),
+        max_failures: run.max_failures === 'unlimited' ? null : Number(run.max_failures) || null,
+        trace: run.trace || 'retain-on-failure',
+        reporter: ['json', 'html', 'junit'].includes(run.reporter) ? run.reporter : 'json',
+        timeout_seconds: Number(run.timeout_seconds) || 120,
+      },
+      source: {
+        source_snapshot: file.rows[0]?.source_code || '// Historical run: source snapshot was unavailable.',
+        cde_manifest: sourceSnapshot?.manifest || { importedSnapshot: sourceSnapshot || null },
+      },
+      logs: run.logs || null,
+      results: { report: run.report || null },
+    });
     await remember('run', run.id, targetId);
     await target.query(
       `INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('RUN_IMPORTED','RUN',$1,$2::jsonb)`,

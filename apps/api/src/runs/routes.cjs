@@ -4,8 +4,32 @@ const { ApiError, asyncRoute, camelRow, cleanText, pagination, paged } = require
 const { createApproachRun } = require('./create-run.cjs');
 const { notifyRun } = require('../../../../shared/log-excerpt.cjs');
 const {
-  RUN_EVENT_COLUMNS, RUN_SNAPSHOT_JSON, RUN_SNAPSHOT_LIST_JSON, RUN_ARTIFACTS_JSON, attachRunSse,
+  RUN_EVENT_COLUMNS, RUN_SNAPSHOT_JSON, RUN_SNAPSHOT_LIST_JSON, RUN_ARTIFACTS_JSON, RUN_CHILD_JOINS, attachRunSse,
 } = require('./events.cjs');
+const { getRunLogs } = require('../../../../shared/db/run-store.cjs');
+const { buildRunDelta, detailsFromReport } = require('../../../../shared/run-delta.cjs');
+
+const PREVIOUS_RUN_JSON = `(
+  SELECT jsonb_build_object(
+    'id', prev.id,
+    'status', prev.status,
+    'completedAt', prev.completed_at,
+    'failedTests', prev.failed_tests,
+    'passedTests', prev.passed_tests,
+    'totalTests', prev.total_tests
+  )
+  FROM runs prev
+  WHERE prev.project_id = r.project_id
+    AND prev.id <> r.id
+    AND prev.completed_at IS NOT NULL
+    AND (
+      COALESCE(prev.pack_id, '') = COALESCE(r.pack_id, '')
+      AND COALESCE(prev.tool_kind, '') = COALESCE(r.tool_kind, '')
+      AND COALESCE(prev.test_file_path, '') = COALESCE(r.test_file_path, '')
+    )
+  ORDER BY prev.completed_at DESC
+  LIMIT 1
+)`;
 
 function artifactRoot() {
   return path.resolve(process.env.ARTIFACT_ROOT || path.resolve(process.cwd(), 'artifacts', 'playwright'));
@@ -45,7 +69,9 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     const result = await pool.query(
       `SELECT ${RUN_EVENT_COLUMNS}, p.name AS project_name, e.name AS environment_name, e.base_url,
               u.full_name AS requested_by_name, ${RUN_SNAPSHOT_LIST_JSON}, ${RUN_ARTIFACTS_JSON}
-         FROM runs r JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by
+         FROM runs r
+         ${RUN_CHILD_JOINS}
+         JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by
          ${where} ORDER BY r.requested_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, limit, offset],
     );
@@ -56,7 +82,9 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     const result = await pool.query(
       `SELECT ${RUN_EVENT_COLUMNS}, p.name AS project_name, e.name AS environment_name, e.base_url, u.full_name AS requested_by_name,
               ${RUN_SNAPSHOT_JSON}, ${RUN_ARTIFACTS_JSON}
-         FROM runs r JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1`,
+         FROM runs r
+         ${RUN_CHILD_JOINS}
+         JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1`,
       [req.params.id],
     );
     if (!result.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
@@ -74,7 +102,9 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
         const result = await pool.query(
           `SELECT ${RUN_EVENT_COLUMNS}, p.name AS project_name, e.name AS environment_name, e.base_url, u.full_name AS requested_by_name,
                   ${RUN_SNAPSHOT_JSON}, ${RUN_ARTIFACTS_JSON}
-             FROM runs r JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1`,
+             FROM runs r
+             ${RUN_CHILD_JOINS}
+             JOIN projects p ON p.id=r.project_id JOIN environments e ON e.id=r.environment_id JOIN users u ON u.id=r.requested_by WHERE r.id=$1`,
           [req.params.id],
         );
         return camelRow(result.rows[0]);
@@ -84,7 +114,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
   }));
 
   app.get('/api/runs/:id/logs', asyncRoute(async (req, res) => {
-    const current = await pool.query('SELECT project_id, logs FROM runs WHERE id=$1', [req.params.id]);
+    const current = await pool.query('SELECT project_id FROM runs WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id);
     const artifact = await pool.query(
@@ -102,7 +132,34 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
         /* fall through to DB excerpt */
       }
     }
-    res.type('text/plain; charset=utf-8').send(current.rows[0].logs || '');
+    const logs = await getRunLogs(pool, req.params.id);
+    res.type('text/plain; charset=utf-8').send(logs || '');
+  }));
+
+  app.get('/api/runs/:id/delta', asyncRoute(async (req, res) => {
+    const current = await pool.query(
+      `SELECT r.id, r.project_id, r.status, r.pack_id, r.tool_kind, r.test_file_path, r.completed_at,
+              r.failed_tests, r.passed_tests, r.total_tests, res.report, ${PREVIOUS_RUN_JSON} AS previous_run
+         FROM runs r
+         LEFT JOIN run_results res ON res.run_id = r.id
+        WHERE r.id = $1`,
+      [req.params.id],
+    );
+    if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
+    await ensureProjectAccess(req.user, current.rows[0].project_id);
+    const row = current.rows[0];
+    const previousId = row.previous_run?.id || null;
+    let previousReport = null;
+    if (previousId) {
+      const prev = await pool.query('SELECT report FROM run_results WHERE run_id = $1', [previousId]);
+      previousReport = prev.rows[0]?.report || null;
+    }
+    const delta = buildRunDelta(detailsFromReport(previousReport), detailsFromReport(row.report));
+    res.json({
+      runId: row.id,
+      previousRun: row.previous_run || null,
+      delta,
+    });
   }));
 
   app.post('/api/runs', asyncRoute(async (req, res) => {
@@ -135,7 +192,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     await audit(pool, req.user.id, 'RUN_CANCEL_REQUESTED', 'RUN', req.params.id);
     await notifyRun(pool, req.params.id);
     const result = await pool.query(
-      `SELECT ${RUN_EVENT_COLUMNS} FROM runs r WHERE r.id=$1`,
+      `SELECT ${RUN_EVENT_COLUMNS} FROM runs r ${RUN_CHILD_JOINS} WHERE r.id=$1`,
       [req.params.id],
     );
     res.json(camelRow(result.rows[0]));

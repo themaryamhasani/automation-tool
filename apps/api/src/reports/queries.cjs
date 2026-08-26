@@ -310,17 +310,19 @@ async function loadRuns(pool, filters, query, { exportAll = false } = {}) {
 
 async function loadFacets(pool, user) {
   const projectSql = user.role === 'ADMIN'
-    ? 'SELECT p.id, p.name, p.code FROM projects p WHERE p.is_active=true ORDER BY p.name'
+    ? "SELECT p.id, p.name, p.code FROM projects p WHERE p.is_active=true AND p.kind='NAMED' ORDER BY p.name"
     : `SELECT p.id, p.name, p.code FROM projects p
         JOIN user_projects up ON up.project_id=p.id AND up.user_id=$1
-       WHERE p.is_active=true ORDER BY p.name`;
+       WHERE p.is_active=true AND p.kind='NAMED' ORDER BY p.name`;
   const projects = await fetchRows(pool, projectSql, user.role === 'ADMIN' ? [] : [user.id]);
   const envSql = user.role === 'ADMIN'
     ? `SELECT e.id, e.name, e.project_id, p.name AS project_name
-         FROM environments e JOIN projects p ON p.id=e.project_id ORDER BY p.name, e.name`
+         FROM environments e JOIN projects p ON p.id=e.project_id
+        WHERE p.kind='NAMED' ORDER BY p.name, e.name`
     : `SELECT e.id, e.name, e.project_id, p.name AS project_name
          FROM environments e JOIN projects p ON p.id=e.project_id
          JOIN user_projects up ON up.project_id=e.project_id AND up.user_id=$1
+        WHERE p.kind='NAMED'
         ORDER BY p.name, e.name`;
   const environments = await fetchRows(pool, envSql, user.role === 'ADMIN' ? [] : [user.id]);
   const runAccess = buildRunFilters(user, {}, { ignoreDates: true });

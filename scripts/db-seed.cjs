@@ -1,11 +1,13 @@
 const path = require('node:path');
 const argon2 = require('argon2');
 const { Client } = require('pg');
+const { applySearchPath } = require('../shared/db/search-path.cjs');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 async function main() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
+  await applySearchPath(client);
   const existing = await client.query("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1");
   if (!existing.rowCount) {
     const passwordHash = await argon2.hash(process.env.INITIAL_ADMIN_PASSWORD || 'Admin@12345');

@@ -37,6 +37,9 @@ function buildRunFilters(user, query = {}, options = {}) {
   if (projectId) {
     push('r.project_id=$idx', projectId);
     applied.projectId = projectId;
+  } else {
+    // Organizational reports exclude approach workspace projects (ws-*).
+    clauses.push(`EXISTS (SELECT 1 FROM projects px WHERE px.id = r.project_id AND px.kind = 'NAMED')`);
   }
   const environmentId = optionalUuid(query.environmentId, 'environmentId');
   if (environmentId) {

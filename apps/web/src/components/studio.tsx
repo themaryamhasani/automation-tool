@@ -87,7 +87,7 @@ export type ArtifactKind = 'playwright' | 'k6' | 'danger' | 'unit' | 'openapi' |
 
 const ARTIFACTS: Array<{ id: ArtifactKind; label: string; hint: string; ext: string; folder: string; name: string }> = [
   { id: 'playwright', label: 'Playwright', hint: 'تست مرورگر', ext: '.spec.ts', folder: 'scripts/e2e', name: 'scenario' },
-  { id: 'k6', label: 'k6', hint: 'بار و HTTP', ext: '.js', folder: 'scripts', name: 'k6' },
+  { id: 'k6', label: 'k6', hint: 'بار و HTTP', ext: '.js', folder: 'scripts/k6', name: 'load' },
   { id: 'danger', label: 'Danger', hint: 'سوئیت API', ext: '.mjs', folder: 'scripts/api', name: 'run' },
   { id: 'unit', label: 'Unit', hint: 'تست واحد Vitest', ext: '.test.cjs', folder: 'scripts/vitest', name: 'runtime' },
   { id: 'openapi', label: 'OpenAPI', hint: 'قرارداد Spectral', ext: '.yaml', folder: 'scripts', name: 'openapi' },

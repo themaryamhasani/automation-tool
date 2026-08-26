@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ChevronDown, FileText, MinusCircle, Terminal, XCircle } from 'lucide-react';
-import { fetchText } from '../api';
+import { api, fetchText } from '../api';
 import type { Run, RunReportTest } from '../types';
 import { Badge, cn } from './ui';
 
@@ -14,6 +14,32 @@ const STATUS_FA: Record<string, string> = {
   ERROR: 'خطا',
   CANCELLED: 'لغو شد',
 };
+
+type DeltaChange =
+  | 'new_fail' | 'still_fail' | 'fixed' | 'fail_to_skip' | 'pass_to_skip'
+  | 'skip_to_pass' | 'new_pass' | 'removed_fail' | 'changed';
+
+interface RunDeltaResponse {
+  runId: string;
+  previousRun: {
+    id: string;
+    status: string;
+    completedAt?: string | null;
+    failedTests?: number | null;
+    passedTests?: number | null;
+    totalTests?: number | null;
+  } | null;
+  delta: {
+    summary: {
+      newFail: number;
+      stillFail: number;
+      fixed: number;
+      regressionCount: number;
+      openFailCount: number;
+    };
+    items: Array<{ title: string; change: DeltaChange; path?: string | null; rightError?: string | null }>;
+  };
+}
 
 function outcomeTone(outcome: string) {
   if (['unexpected', 'failed', 'timedOut'].includes(outcome)) return 'red' as const;
@@ -67,6 +93,7 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
   const [showLog, setShowLog] = useState(failed);
   const [diskLog, setDiskLog] = useState('');
   const [logLoading, setLogLoading] = useState(true);
+  const [delta, setDelta] = useState<RunDeltaResponse | null>(null);
   const dark = tone === 'dark';
   const details: RunReportTest[] = run.report?.details || [];
   const passed = run.passedTests ?? run.report?.passed ?? 0;
@@ -79,6 +106,7 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
   const message = failed ? errorText(run) : '';
   const badgeTone = running ? 'blue' : run.status === 'FAILED' || run.status === 'ERROR' ? 'red' : skipOnly ? 'amber' : run.status === 'PASSED' ? 'green' : 'amber';
   const badgeLabel = skipOnly ? 'اسکیپ‌شده' : (STATUS_FA[run.status] || run.status);
+  const summary = delta?.delta.summary;
 
   useEffect(() => {
     if (failed && !details.length) setShowLog(true);
@@ -94,6 +122,18 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
       .finally(() => { if (!cancelled) setLogLoading(false); });
     return () => { cancelled = true; };
   }, [showLog, run.id, run.status, run.logs]);
+
+  useEffect(() => {
+    if (!run.id || running) {
+      setDelta(null);
+      return;
+    }
+    let cancelled = false;
+    api<RunDeltaResponse>(`/api/runs/${encodeURIComponent(run.id)}/delta`)
+      .then(payload => { if (!cancelled) setDelta(payload); })
+      .catch(() => { if (!cancelled) setDelta(null); });
+    return () => { cancelled = true; };
+  }, [run.id, run.status, running, run.completedAt]);
 
   return <div className={cn('h-full border-t', dark ? 'border-slate-800 bg-[#071018] text-slate-200' : 'border-gray-200 bg-white text-gray-900')}>
     <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
@@ -122,6 +162,22 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
         <p className="mt-0.5 text-base font-bold">{card.value.toLocaleString('fa-IR')}</p>
       </div>)}
     </div>
+    {summary && (
+      <div className="mx-3 mb-2 grid grid-cols-3 gap-2">
+        <div className={cn('rounded-lg px-2 py-1.5', dark ? 'bg-red-500/10 text-red-200' : 'bg-red-50 text-red-700')}>
+          <p className="text-[10px] opacity-80">رگرسیون</p>
+          <p className="mt-0.5 text-base font-bold">{summary.regressionCount.toLocaleString('fa-IR')}</p>
+        </div>
+        <div className={cn('rounded-lg px-2 py-1.5', dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-800')}>
+          <p className="text-[10px] opacity-80">هنوز باز</p>
+          <p className="mt-0.5 text-base font-bold">{summary.openFailCount.toLocaleString('fa-IR')}</p>
+        </div>
+        <div className={cn('rounded-lg px-2 py-1.5', dark ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700')}>
+          <p className="text-[10px] opacity-80">رفع‌شده</p>
+          <p className="mt-0.5 text-base font-bold">{summary.fixed.toLocaleString('fa-IR')}</p>
+        </div>
+      </div>
+    )}
     {running && run.status === 'PREPARING' && (
       <p className={cn('mx-3 mb-2 rounded-lg px-2 py-1.5 text-[11px] leading-5', dark ? 'bg-blue-500/10 text-blue-200' : 'bg-blue-50 text-blue-800')}>
         سورس پروژه از CDE دریافت می‌شود و بعد روی رانتایم Express همین ابزار اجرا می‌گردد. این مرحله معمولاً حدود یک دقیقه طول می‌کشد و خطا نیست؛ دوباره Run نزنید.

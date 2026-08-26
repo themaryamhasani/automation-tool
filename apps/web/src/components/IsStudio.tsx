@@ -10,6 +10,8 @@ import {
 } from './studio';
 import { Badge, Button, EmptyState, Loading, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
+import { runConfigToPayload } from '../tool-options';
+import { ToolRunOptionsPanel, useToolRunConfig } from './ToolRunOptions';
 
 interface Product {
   id: string; title: string; docPath: string; relativePath: string; flows: string[]; automatedFlows: string[];
@@ -39,6 +41,7 @@ export function IsStudio() {
   const [file, setFile] = useState<OpenFile | null>(null);
   const [query, setQuery] = useState('');
   const [tool, setTool] = useState<ToolKind>('DANGER');
+  const { config: runConfig, setConfig: setRunConfig } = useToolRunConfig(tool);
   const [flowId, setFlowId] = useState('ALL');
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -191,6 +194,7 @@ export function IsStudio() {
           toolKind,
           flowId: toolKind === 'DANGER' ? flowId : undefined,
           testFilePath: file?.path,
+          ...runConfigToPayload(runConfig),
         }),
       });
       setLastRun(normalizeRun({
@@ -241,7 +245,8 @@ export function IsStudio() {
       </div>
     </aside>}
     tabs={<StudioTabs sections={SECTIONS} active={section} onChange={id => setSection(id as SectionId)} />}
-    toolbar={section === 'scripts' ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+    toolbar={section === 'scripts' ? <div className="space-y-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
       <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
         {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
       </Select>
@@ -255,6 +260,8 @@ export function IsStudio() {
         {file?.path && <code className="max-w-56 truncate text-slate-500" dir="ltr">{file.name}</code>}
         {health && <Badge tone={health.ready ? 'green' : 'amber'}>{health.ready ? 'runtime آماده' : 'IS را بالا بیاورید'}</Badge>}
       </div>
+      </div>
+      <ToolRunOptionsPanel tool={tool} config={runConfig} onChange={setRunConfig} />
     </div> : (canWrite ? <div className="flex items-center justify-end gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
       <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>
     </div> : undefined)}

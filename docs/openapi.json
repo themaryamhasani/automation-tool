@@ -1,0 +1,166 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Automation Tool API",
+    "version": "4.0.0",
+    "description": "Platform API for scheduling, running, and reporting automated quality checks across IS, CDE, Git, and ZIP sources."
+  },
+  "servers": [{ "url": "/", "description": "Same origin" }],
+  "tags": [
+    { "name": "Auth" },
+    { "name": "Runs" },
+    { "name": "Automation" },
+    { "name": "Analytics" },
+    { "name": "Pipeline" },
+    { "name": "Ops" },
+    { "name": "Platform" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Platform"],
+        "summary": "Liveness",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Password login (may return 202 for 2FA challenge)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["identity", "password"],
+                "properties": {
+                  "identity": { "type": "string" },
+                  "password": { "type": "string", "format": "password" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Session issued" },
+          "202": { "description": "TOTP challenge required" }
+        }
+      }
+    },
+    "/api/auth/2fa/verify": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Complete TOTP challenge",
+        "responses": { "200": { "description": "Session issued" } }
+      }
+    },
+    "/api/auth/sso/start": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Begin OIDC SSO redirect",
+        "responses": { "302": { "description": "Redirect to IdP" } }
+      }
+    },
+    "/api/runs": {
+      "get": {
+        "tags": ["Runs"],
+        "summary": "List runs",
+        "security": [{ "sessionCookie": [] }, { "bearerAuth": [] }, { "apiToken": [] }],
+        "responses": { "200": { "description": "Paged runs" } }
+      },
+      "post": {
+        "tags": ["Runs"],
+        "summary": "Queue a run (single create-run path)",
+        "security": [{ "sessionCookie": [] }, { "bearerAuth": [] }, { "apiToken": [] }],
+        "responses": { "201": { "description": "Run created" } }
+      }
+    },
+    "/api/projects/{projectId}/suites": {
+      "get": {
+        "tags": ["Automation"],
+        "summary": "List test suites",
+        "parameters": [{ "name": "projectId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Suites" } }
+      }
+    },
+    "/api/analytics/flaky": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Flaky test stats",
+        "responses": { "200": { "description": "Paged flaky targets" } }
+      }
+    },
+    "/api/analytics/runs/compare": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Compare two runs",
+        "parameters": [
+          { "name": "leftId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "rightId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Diff summary" } }
+      }
+    },
+    "/api/runs/{id}/delta": {
+      "get": {
+        "tags": ["Runs"],
+        "summary": "Delta vs previous same-target run (regression / still-fail / fixed)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "baselineId", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Classified test delta" } }
+      }
+    },
+    "/api/pipeline/gate": {
+      "get": {
+        "tags": ["Pipeline"],
+        "summary": "CI quality gate check by project + commit SHA",
+        "parameters": [
+          { "name": "projectId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "commitSha", "in": "query", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Gate passed" },
+          "409": { "description": "Gate failed" }
+        }
+      }
+    },
+    "/api/ops/snapshot": {
+      "get": {
+        "tags": ["Ops"],
+        "summary": "Operations snapshot (queue, fleet, CDE)",
+        "responses": { "200": { "description": "Snapshot" } }
+      }
+    },
+    "/api/ops/events": {
+      "get": {
+        "tags": ["Ops"],
+        "summary": "SSE stream of operations snapshots",
+        "responses": { "200": { "description": "text/event-stream" } }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "tags": ["Platform"],
+        "summary": "This OpenAPI document",
+        "responses": { "200": { "description": "OpenAPI 3 JSON" } }
+      }
+    },
+    "/api/docs/runbook": {
+      "get": {
+        "tags": ["Platform"],
+        "summary": "Production runbook (Markdown)",
+        "responses": { "200": { "description": "Markdown" } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": { "type": "apiKey", "in": "cookie", "name": "automation_session" },
+      "bearerAuth": { "type": "http", "scheme": "bearer" },
+      "apiToken": { "type": "apiKey", "in": "header", "name": "X-Api-Token" }
+    }
+  }
+}

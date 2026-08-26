@@ -39,7 +39,10 @@ ALTER TABLE runs ADD CONSTRAINT runs_source_approach_check
   CHECK (source_approach IN ('CDE', 'IS', 'GITHUB', 'GIT_EDUS', 'ZIP'));
 ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_tool_kind_check;
 ALTER TABLE runs ADD CONSTRAINT runs_tool_kind_check
-  CHECK (tool_kind IN ('PLAYWRIGHT', 'DANGER', 'K6', 'VITEST'));
+  CHECK (tool_kind IN (
+    'PLAYWRIGHT', 'DANGER', 'K6', 'VITEST',
+    'BIOME', 'GITLEAKS', 'AUDIT', 'SEMGREP', 'SPECTRAL', 'AXE'
+  ));
 
 CREATE INDEX IF NOT EXISTS runs_approach_tool_idx ON runs (source_approach, tool_kind, requested_at DESC);
 

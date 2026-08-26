@@ -42,6 +42,12 @@ export function RunsPage() {
   const [status, setStatus] = useState('');
   const [detail, setDetail] = useState<Run | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [previousRun, setPreviousRun] = useState<{
+    id: string;
+    status: string;
+    failedTests?: number | null;
+  } | null>(null);
+  const [deltaWorse, setDeltaWorse] = useState(false);
 
   const loadProjects = useCallback(async () => {
     const rows = await api<Project[]>('/api/projects');
@@ -78,6 +84,28 @@ export function RunsPage() {
     return () => window.clearTimeout(timer);
   }, [search]);
   useRunPoll(detail && ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(detail.status) ? detail : null, run => setDetail(run));
+  useEffect(() => {
+    if (!detail?.id || ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(detail.status)) {
+      setPreviousRun(null);
+      setDeltaWorse(false);
+      return;
+    }
+    let cancelled = false;
+    api<{ previousRun: typeof previousRun; delta: { summary: { regressionCount: number } } }>(
+      `/api/runs/${encodeURIComponent(detail.id)}/delta`,
+    )
+      .then(payload => {
+        if (cancelled) return;
+        setPreviousRun(payload.previousRun);
+        setDeltaWorse((payload.delta?.summary?.regressionCount || 0) > 0);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPreviousRun(null);
+        setDeltaWorse(false);
+      });
+    return () => { cancelled = true; };
+  }, [detail?.id, detail?.status, detail?.completedAt]);
   useEffect(() => {
     const live = data?.data.find(run => ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(run.status));
     if (!live) return undefined;
@@ -152,6 +180,23 @@ export function RunsPage() {
           <Card className="p-3 sm:p-3"><p className="text-xs text-gray-500">موفق</p><p className="mt-2 font-semibold text-emerald-600">{(detail.passedTests ?? 0).toLocaleString('fa-IR')}</p></Card>
           <Card className="p-3 sm:p-3"><p className="text-xs text-gray-500">ناموفق</p><p className="mt-2 font-semibold text-red-600">{(detail.failedTests ?? 0).toLocaleString('fa-IR')}</p></Card>
         </div>
+        {(previousRun || deltaWorse) && (
+          <Card className="p-3 sm:p-3">
+            <p className="text-xs text-gray-500">Δ نسبت به قبلی</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {previousRun ? (
+                <p className="text-sm text-gray-700">
+                  اجرا قبلی: <code dir="ltr" className="text-xs">{previousRun.id.slice(0, 8)}</code>
+                  {' · '}
+                  {(previousRun.failedTests ?? 0).toLocaleString('fa-IR')} ناموفق
+                </p>
+              ) : (
+                <p className="text-sm text-gray-400">اجرای قبلی هم‌هدف پیدا نشد.</p>
+              )}
+              {deltaWorse && <Badge tone="red">بدتر از قبلی</Badge>}
+            </div>
+          </Card>
+        )}
         <Card><div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3"><div><span className="text-gray-500">فایل: </span><code dir="ltr">{detail.testFilePath}</code></div><div><span className="text-gray-500">محیط: </span>{detail.environmentName}</div><div><span className="text-gray-500">Runner: </span>{detail.runnerId || '—'}</div><div><span className="text-gray-500">شروع: </span>{formatDate(detail.startedAt)}</div><div><span className="text-gray-500">پایان: </span>{formatDate(detail.completedAt)}</div><div><span className="text-gray-500">Reporter: </span>{detail.reporter}</div></div></Card>
         {detail.cdeSnapshot && <Card><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold text-gray-900">Snapshot کامل CDE</h3><p className="mt-1 text-xs text-gray-500">{detail.cdeSnapshot.fileCount.toLocaleString('fa-IR')} فایل · Project: <code dir="ltr">{detail.cdeProjectKey}</code></p></div><Badge tone={detail.cdeSnapshot.status === 'READY' ? 'green' : detail.cdeSnapshot.status === 'FAILED' ? 'red' : 'purple'}>{detail.cdeSnapshot.status}</Badge></div>{detail.cdeSnapshot.contentHash && <p className="mt-3 break-all font-mono text-[10px] text-gray-400" dir="ltr">SHA-256: {detail.cdeSnapshot.contentHash}</p>}{detail.cdeSnapshot.errorMessage && <p className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{detail.cdeSnapshot.errorCode}: {detail.cdeSnapshot.errorMessage}</p>}</Card>}
         <div className="overflow-hidden rounded-xl border border-gray-200"><RunReportPanel run={detail} /></div>

@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Client } = require('pg');
+const { applySearchPath } = require('../shared/db/search-path.cjs');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
 const baseUrl = process.env.SELF_CHECK_API_URL || 'http://127.0.0.1:4280';
@@ -22,6 +23,7 @@ async function cleanup() {
   if (!projectId) return;
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
+  await applySearchPath(client);
   try {
     await client.query('BEGIN');
     await client.query(`DELETE FROM audit_logs WHERE entity_id IN (SELECT id::text FROM runs WHERE project_id=$1) OR entity_id=$1::text`, [projectId]);

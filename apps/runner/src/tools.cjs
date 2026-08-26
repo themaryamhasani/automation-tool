@@ -13,6 +13,15 @@ const { materializeExpressRuntime, loadSnapshotFiles, writeSnapshotTree } = requ
 const { isStaticTool } = require('../../api/src/approaches/constants.cjs');
 const { axeJob, runQualityTool } = require('./quality-tools.cjs');
 const { preparePlaywrightEnv } = require('./playwright-env.cjs');
+const { loadRuntimeSessionEnv } = require('./runtime-session.cjs');
+const { resolveAppTarget } = require('../../../shared/runtime/app-targets.cjs');
+const {
+  playwrightConfigFromRun,
+  toolOptionsFromRun,
+  k6CliArgs,
+  vitestCliArgs,
+  parseExtraHeaders,
+} = require('../../../shared/tool-options.cjs');
 
 function snapshotOf(run) {
   try { return JSON.parse(run.source_snapshot || '{}'); }
@@ -60,6 +69,8 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
   if (!pack) throw new Error('بسته IS برای این اجرا پیدا نشد.');
   const paths = packPaths(pack.id);
   const timeout = Number(run.timeout_seconds || 900);
+  const pwConfig = playwrightConfigFromRun(run);
+  const toolOptions = toolOptionsFromRun(run);
   let command;
   let args;
   let cwd;
@@ -85,13 +96,15 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
         : [pack.danger.entry, `--flow=${flow}`];
       env = envWithDotEnv(cwd);
     }
+    if (toolOptions.requestTimeoutMs) env.DANGER_REQUEST_TIMEOUT_MS = String(toolOptions.requestTimeoutMs);
+    if (toolOptions.bailOnFirstFailure) env.DANGER_BAIL = '1';
   } else if (run.tool_kind === 'K6') {
     cwd = paths.k6Cwd;
     const script = path.join(cwd, pack.k6.script);
     if (!fs.existsSync(script)) throw new Error(`اسکریپت k6 پیدا نشد: ${script}`);
     const k6 = resolveBin('k6');
     command = k6.command;
-    args = ['run', pack.k6.script];
+    args = k6CliArgs(pack.k6.script, toolOptions);
     env = envWithDotEnv(cwd);
   } else if (run.tool_kind === 'PLAYWRIGHT') {
     const selected = String(run.tool_target || run.test_file_path || '').replace(/\\/g, '/').replace(/^doc\//, '');
@@ -114,7 +127,7 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
         specPath,
         workspace,
         baseURL: pack.e2eBaseUrl,
-        headed: Boolean(run.headed),
+        headed: Boolean(pwConfig.headed),
       });
     }
     command = job.command;
@@ -122,26 +135,36 @@ async function executeIsRun(run, { shouldCancel, workspace, onLog }) {
     cwd = job.cwd;
     jsonFile = job.jsonFile;
     env = mergeDotEnv(mergeDotEnv(envWithDotEnv(paths.e2eCwd), paths.dangerCwd), cwd);
+    const extraHeaders = toolOptions.extraHeaders ? parseExtraHeaders(toolOptions.extraHeaders) : undefined;
     env = preparePlaywrightEnv({
       ...env,
       ...job.envExtra,
-      PW_CHANNEL: pack.e2e.channel || job.envExtra.PW_CHANNEL || env.PW_CHANNEL || 'chrome',
+      PW_CHANNEL: toolOptions.channel || pack.e2e.channel || job.envExtra.PW_CHANNEL || env.PW_CHANNEL || 'chrome',
       E2E_BASE_URL: env.E2E_BASE_URL || pack.e2eBaseUrl,
+      PW_TEST_TIMEOUT_MS: toolOptions.testTimeoutMs ? String(toolOptions.testTimeoutMs) : env.PW_TEST_TIMEOUT_MS,
+      PW_ACTION_TIMEOUT_MS: toolOptions.actionTimeoutMs ? String(toolOptions.actionTimeoutMs) : env.PW_ACTION_TIMEOUT_MS,
+      PW_NAVIGATION_TIMEOUT_MS: toolOptions.navigationTimeoutMs ? String(toolOptions.navigationTimeoutMs) : env.PW_NAVIGATION_TIMEOUT_MS,
+      ...(extraHeaders ? { PW_EXTRA_HEADERS: JSON.stringify(extraHeaders) } : {}),
     }, { searchDirs: [paths.e2eCwd, paths.dangerCwd, paths.productRoot, cwd, path.join(paths.e2eCwd, '.auth')], workspace });
   } else if (run.tool_kind === 'VITEST') {
     cwd = paths.unitCwd;
     if (!fs.existsSync(cwd)) throw new Error(`پوشه unit سرویس پیدا نشد: ${cwd}`);
     const job = unitJob(pack.unit.command, cwd);
     command = job.command;
-    args = job.args;
+    args = vitestCliArgs(job.args, toolOptions);
     env = envWithDotEnv(cwd);
   } else if (run.tool_kind === 'AXE') {
-    const job = axeJob({ workspace, baseURL: pack.e2eBaseUrl, headed: Boolean(run.headed) });
+    const job = axeJob({ workspace, baseURL: pack.e2eBaseUrl, headed: Boolean(pwConfig.headed) });
     command = job.command;
     args = job.args;
     cwd = job.cwd;
     jsonFile = job.jsonFile;
-    env = { ...envWithDotEnv(paths.e2eCwd), ...job.envExtra, E2E_BASE_URL: pack.e2eBaseUrl };
+    env = {
+      ...envWithDotEnv(paths.e2eCwd),
+      ...job.envExtra,
+      E2E_BASE_URL: pack.e2eBaseUrl,
+      PW_CHANNEL: toolOptions.channel || env.PW_CHANNEL || 'chrome',
+    };
   } else if (isStaticTool(run.tool_kind)) {
     const quality = await runQualityTool({
       toolKind: run.tool_kind,
@@ -459,6 +482,8 @@ async function materializeCdeScript(run, pack, pool, workspace, selected) {
 async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog }) {
   const projectKey = run.pack_id || run.cde_project_key;
   const pack = localPack.ensurePack('CDE', projectKey, { title: projectKey });
+  const pwConfig = playwrightConfigFromRun(run);
+  const toolOptions = toolOptionsFromRun(run);
   if (isStaticTool(run.tool_kind)) {
     const scanRoots = [pack.root];
     if (run.cde_snapshot_id) {
@@ -493,19 +518,31 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
     };
   }
   const built = await materializeExpressRuntime(pool, run);
-  const timeout = Math.max(Number(run.timeout_seconds || 180), run.tool_kind === 'PLAYWRIGHT' || run.tool_kind === 'AXE' ? 900 : 180);
+  const timeout = Math.max(
+    Number(run.timeout_seconds || 180),
+    run.tool_kind === 'K6' ? 600 : (run.tool_kind === 'PLAYWRIGHT' || run.tool_kind === 'AXE' ? 900 : 180),
+  );
+  const runtimeEnv = await loadRuntimeSessionEnv(pool, run);
+  const targetHints = resolveAppTarget(projectKey, {
+    authMode: runtimeEnv.AUTOMATION_RUNTIME_AUTH_MODE || undefined,
+  });
   const env = {
     ...process.env,
+    ...runtimeEnv,
     FORCE_COLOR: '0',
     CI: '1',
     PORT: String(built.port),
     AUTOMATION_RUNTIME_URL: built.baseUrl,
-    BASE_URL: built.baseUrl,
-    E2E_BASE_URL: built.baseUrl,
+    BASE_URL: runtimeEnv.AUTOMATION_RUNTIME_ORIGIN || built.baseUrl,
+    E2E_BASE_URL: runtimeEnv.E2E_BASE_URL || built.baseUrl,
     CDE_EXPRESS_ROOT: built.appRoot,
     CDE_PROJECT_KEY: projectKey,
-    PW_CHANNEL: 'chrome',
+    PW_CHANNEL: toolOptions.channel || 'chrome',
+    TAVAN_COURSE_ID: process.env.TAVAN_COURSE_ID || targetHints.preferredCourseId || '',
+    TAVAN_ORGAN_PATH: process.env.TAVAN_ORGAN_PATH || targetHints.preferredOrganPath || '',
   };
+  if (toolOptions.requestTimeoutMs) env.DANGER_REQUEST_TIMEOUT_MS = String(toolOptions.requestTimeoutMs);
+  if (toolOptions.bailOnFirstFailure) env.DANGER_BAIL = '1';
   const selected = [run.test_file_path, run.tool_target]
     .map(value => String(value || '').replace(/\\/g, '/'))
     .find(value => /\.(mjs|cjs|js|ts)$/i.test(value)) || '';
@@ -521,15 +558,17 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
         : (selected.endsWith('.mjs') ? path.join(pack.root, selected) : path.join(pack.root, 'scripts', 'api', 'run.mjs'));
       cwd = path.dirname(script);
       command = process.execPath;
-      args = [script];
+      const flow = String(run.flow_id || 'ALL').toUpperCase();
+      args = flow && flow !== 'ALL' ? [script, `--flow=${flow}`] : [script];
     } else if (run.tool_kind === 'K6') {
+      const fallback = localPack.defaultK6Path('CDE', projectKey);
       const script = resolved && fs.existsSync(resolved)
         ? resolved
-        : (selected.endsWith('.js') && !selected.endsWith('.spec.js') ? path.join(pack.root, selected) : path.join(pack.root, 'scripts', 'k6.js'));
+        : (selected.endsWith('.js') && !selected.endsWith('.spec.js') ? path.join(pack.root, selected) : path.join(pack.root, fallback));
       cwd = path.dirname(script);
       const k6 = resolveBin('k6');
       command = k6.command;
-      args = ['run', path.basename(script)];
+      args = k6CliArgs(path.basename(script), toolOptions);
     } else if (run.tool_kind === 'VITEST') {
       const fallback = fs.existsSync(path.join(pack.root, 'scripts', 'vitest', 'runtime.test.cjs'))
         ? path.join(pack.root, 'scripts', 'vitest', 'runtime.test.cjs')
@@ -541,7 +580,7 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
       command = process.execPath;
       args = ['--test', script];
     } else if (run.tool_kind === 'AXE') {
-      const job = axeJob({ workspace, baseURL: built.baseUrl, headed: Boolean(run.headed) });
+      const job = axeJob({ workspace, baseURL: built.baseUrl, headed: Boolean(pwConfig.headed) });
       command = job.command;
       args = job.args;
       cwd = job.cwd;
@@ -555,13 +594,16 @@ async function executeCdeRuntimeRun(run, { shouldCancel, pool, workspace, onLog 
         specPath: spec,
         workspace,
         baseURL: built.baseUrl,
-        headed: Boolean(run.headed),
+        headed: Boolean(pwConfig.headed),
       });
       command = job.command;
       args = job.args;
       cwd = job.cwd;
       jsonFile = job.jsonFile;
       Object.assign(env, job.envExtra);
+      if (toolOptions.testTimeoutMs) env.PW_TEST_TIMEOUT_MS = String(toolOptions.testTimeoutMs);
+      if (toolOptions.actionTimeoutMs) env.PW_ACTION_TIMEOUT_MS = String(toolOptions.actionTimeoutMs);
+      if (toolOptions.navigationTimeoutMs) env.PW_NAVIGATION_TIMEOUT_MS = String(toolOptions.navigationTimeoutMs);
       Object.assign(env, preparePlaywrightEnv(env, { searchDirs: [cwd, pack.root], workspace }));
     }
     let result;

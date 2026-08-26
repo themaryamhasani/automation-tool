@@ -12,6 +12,9 @@ import {
 import { Badge, Button, EmptyState, Loading, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
 import { RunReportPanel } from './RunReportPanel';
+import { RuntimeLoginPanel } from './RuntimeLoginPanel';
+import { runConfigToPayload } from '../tool-options';
+import { ToolRunOptionsPanel, useToolRunConfig } from './ToolRunOptions';
 
 const SECTIONS: Array<{ id: SectionId; label: string; folder: string; create?: boolean }> = [
   { id: 'source', label: 'سورس CDE', folder: '' },
@@ -92,6 +95,7 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
   const [file, setFile] = useState<OpenFile | null>(null);
   const [query, setQuery] = useState('');
   const [tool, setTool] = useState<ToolKind>('DANGER');
+  const { config: runConfig, setConfig: setRunConfig } = useToolRunConfig(tool);
   const [flowId, setFlowId] = useState('ALL');
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -261,6 +265,7 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
           toolKind,
           flowId: flowId || 'ALL',
           testFilePath: file?.path,
+          ...runConfigToPayload(runConfig),
         }),
       });
       setLastRun(normalizeRun({ ...created, toolKind: created.toolKind || toolKind, packId: created.packId || projectKey, status: created.status || 'QUEUED' }));
@@ -304,19 +309,26 @@ export function CdeStudio({ onStatusChange }: { onStatusChange?: (status: CdeCon
     />}
     toolbar={section !== 'source' && section !== 'reports' && projectKey ? (
       section === 'scripts'
-        ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
-          <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
-            {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </Select>
-          {tool === 'DANGER' && <Select value={flowId} onChange={event => setFlowId(event.target.value)} className="min-w-28 bg-slate-900 text-slate-100">
-            {flows.map(flow => <option key={flow} value={flow}>{flow}</option>)}
-          </Select>}
-          <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>{needsLiveRuntime(tool) ? 'اجرا روی رانتایم Express' : 'اسکن استاتیک'}</Button>
-          {canWrite && <Button size="sm" variant="secondary" loading={saving} disabled={!dirty || /^cde-(tests|db-tests|snapshot)\//.test(file?.path || '')} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>}
+        ? <div className="space-y-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+          <RuntimeLoginPanel projectKey={projectKey} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
+              {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </Select>
+            {tool === 'DANGER' && <Select value={flowId} onChange={event => setFlowId(event.target.value)} className="min-w-28 bg-slate-900 text-slate-100">
+              {flows.map(flow => <option key={flow} value={flow}>{flow}</option>)}
+            </Select>}
+            <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>{needsLiveRuntime(tool) ? 'اجرا روی رانتایم Express' : 'اسکن استاتیک'}</Button>
+            {canWrite && <Button size="sm" variant="secondary" loading={saving} disabled={!dirty || /^cde-(tests|db-tests|snapshot)\//.test(file?.path || '')} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>}
+          </div>
+          <ToolRunOptionsPanel tool={tool} config={runConfig} onChange={setRunConfig} />
         </div>
-        : (canWrite ? <div className="flex justify-end border-b border-slate-800 bg-slate-950/80 px-3 py-2">
-          <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>
-        </div> : undefined)
+        : <div className="space-y-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+          <RuntimeLoginPanel projectKey={projectKey} />
+          {canWrite ? <div className="flex justify-end">
+            <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>
+          </div> : null}
+        </div>
     ) : undefined}
     tree={<FileTree
       key={`${treeQuery}:${treeEpoch}`}

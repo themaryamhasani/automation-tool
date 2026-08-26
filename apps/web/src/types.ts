@@ -17,12 +17,15 @@ export interface User {
 export type SourceApproach = 'CDE' | 'IS' | 'GITHUB' | 'GIT_EDUS' | 'ZIP';
 export type ToolKind = 'PLAYWRIGHT' | 'DANGER' | 'K6' | 'VITEST' | 'BIOME' | 'GITLEAKS' | 'AUDIT' | 'SEMGREP' | 'SPECTRAL' | 'AXE';
 
+export type ProjectKind = 'NAMED' | 'WORKSPACE';
+
 export interface Project {
   id: string;
   name: string;
   code: string;
   description?: string | null;
   isActive: boolean;
+  kind?: ProjectKind;
   sourceApproach?: SourceApproach;
   environmentCount?: number;
   fileCount?: number;
@@ -243,6 +246,44 @@ export interface CdeConnectionStatus {
   challenge?: string;
   ecreq?: boolean;
   user?: { firstName: string; lastName: string; displayName: string } | null;
+}
+
+export interface RuntimeSessionStatus {
+  connected: boolean;
+  phase?: string;
+  environmentId?: string;
+  environmentName?: string;
+  projectKey?: string | null;
+  origin?: string;
+  origins?: string[];
+  defaultOrigin?: string;
+  authMode?: string;
+  authModes?: string[];
+  authOrigin?: string;
+  appOrigin?: string;
+  prostage?: string | null;
+  handoff?: {
+    type?: string;
+    clientAccessId?: string;
+    pathTemplate?: string;
+  } | null;
+  cookieScopes?: string[];
+  readyCheck?: { key?: string; expectLogin?: boolean } | null;
+  loginPath?: string | null;
+  loginUrl?: string | null;
+  appPath?: string;
+  appUrl?: string;
+  projectServiceId?: string | null;
+  apiFixtures?: Record<string, unknown>;
+  roleLandings?: Record<string, string>;
+  userSource?: string;
+  loginName?: string;
+  challenge?: string;
+  nextStep?: 'password';
+  ecreq?: boolean;
+  runtimeUser?: { firstName: string; lastName: string; displayName: string } | null;
+  connectedAt?: string;
+  lastUsedAt?: string;
 }
 export type CdeRepositoryType = 'WEB_UI' | 'DATA_SERVICE' | 'API_MODULE' | 'MESSAGE_CONSUMER';
 export interface CdeBranchSelector { kind: 'PUBLIC' | 'PERSONAL'; randId?: string; index?: number }

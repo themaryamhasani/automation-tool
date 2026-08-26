@@ -3,11 +3,18 @@ const { isTool, needsLiveRuntime } = require('../approaches/constants.cjs');
 const { resolveToolTarget, timeoutFor, ToolTargetError } = require('./tool-target.cjs');
 const isService = require('../approaches/is/service.cjs');
 const localPack = require('../approaches/local-pack.cjs');
-const { getBinding, loadConnection } = require('../approaches/routes.cjs');
+const { getBinding } = require('../../../../shared/db/bindings.cjs');
+const { loadConnection } = require('../approaches/routes.cjs');
 const { loadCdeProjectContext } = require('../cde/project-context.cjs');
 const { parsePositiveInt } = require('../http.cjs');
 const { notifyRun } = require('../../../../shared/log-excerpt.cjs');
-
+const { insertRun } = require('../../../../shared/db/run-store.cjs');
+const { PROJECT_KIND_WORKSPACE } = require('../../../../shared/db/project-kind.cjs');
+const {
+  normalizeRunToolConfig,
+  ToolOptionsError,
+  snapshotWithToolOptions,
+} = require('../../../../shared/tool-options.cjs');
 const TRACE_MODES = new Set(['off', 'on', 'retain-on-failure', 'on-first-retry']);
 const REPORTERS = new Set(['html', 'json', 'junit']);
 const BROWSERS = new Set(['chromium', 'firefox', 'webkit']);
@@ -28,15 +35,22 @@ async function ensureWorkspaceProject(pool, user, approach) {
   if (!result.rowCount) {
     try {
       result = await pool.query(
-        `INSERT INTO projects (name, code, description, source_approach) VALUES ($1,$2,$3,$4) RETURNING *`,
-        [names[approach] || `Workspace ${approach}`, code, 'پروژه سیستمی پنل اتوماسیون', approach],
+        `INSERT INTO projects (name, code, description, source_approach, kind)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [names[approach] || `Workspace ${approach}`, code, 'پروژه سیستمی پنل اتوماسیون', approach, PROJECT_KIND_WORKSPACE],
       );
     } catch (error) {
       if (error.code !== '23505') throw error;
       result = await pool.query('SELECT * FROM projects WHERE code=$1', [code]);
     }
-  } else if (result.rows[0].source_approach !== approach) {
-    result = await pool.query('UPDATE projects SET source_approach=$1, updated_at=now() WHERE id=$2 RETURNING *', [approach, result.rows[0].id]);
+  } else {
+    const row = result.rows[0];
+    if (row.source_approach !== approach || row.kind !== PROJECT_KIND_WORKSPACE) {
+      result = await pool.query(
+        `UPDATE projects SET source_approach=$1, kind=$2, updated_at=now() WHERE id=$3 RETURNING *`,
+        [approach, PROJECT_KIND_WORKSPACE, row.id],
+      );
+    }
   }
   await pool.query('INSERT INTO user_projects (user_id, project_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [user.id, result.rows[0].id]);
   const row = result.rows[0];
@@ -44,6 +58,7 @@ async function ensureWorkspaceProject(pool, user, approach) {
     id: row.id,
     name: row.name,
     code: row.code,
+    kind: row.kind || PROJECT_KIND_WORKSPACE,
     sourceApproach: row.source_approach,
     source_approach: row.source_approach,
   };
@@ -162,14 +177,34 @@ async function createClassicCdeFileRun(pool, user, project, body) {
       );
       snapshotId = snapshot.rows[0].id;
     }
-    result = await client.query(
-      `INSERT INTO runs (project_id,environment_id,test_file_id,test_file_path,source_snapshot,browser_projects,headed,workers,retries,max_failures,trace,reporter,timeout_seconds,requested_by,status,cde_project_key,cde_manifest,cde_snapshot_id,source_approach,tool_kind)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18,'CDE','PLAYWRIGHT')
-       RETURNING id, project_id, status, source_approach, tool_kind, pack_id, flow_id, test_file_path, cde_snapshot_id`,
-      [projectId, environmentRow.id, file.rows[0].id, `${file.rows[0].folder_path}/${file.rows[0].file_name}`, file.rows[0].source_code,
-        browsers, Boolean(body?.headed), workers, retries, maxFailures, trace, reporter, timeoutSeconds, user.id,
-        useSnapshot ? 'PREPARING' : 'QUEUED', cdeContext.projectKey, JSON.stringify(cdeManifest), snapshotId],
-    );
+    result = await insertRun(client, {
+      core: {
+        project_id: projectId,
+        environment_id: environmentRow.id,
+        test_file_id: file.rows[0].id,
+        test_file_path: `${file.rows[0].folder_path}/${file.rows[0].file_name}`,
+        requested_by: user.id,
+        status: useSnapshot ? 'PREPARING' : 'QUEUED',
+        source_approach: 'CDE',
+        tool_kind: 'PLAYWRIGHT',
+        cde_project_key: cdeContext.projectKey,
+        cde_snapshot_id: snapshotId,
+      },
+      request: {
+        browser_projects: browsers,
+        headed: Boolean(body?.headed),
+        workers,
+        retries,
+        max_failures: maxFailures,
+        trace,
+        reporter,
+        timeout_seconds: timeoutSeconds,
+      },
+      source: {
+        source_snapshot: file.rows[0].source_code,
+        cde_manifest: cdeManifest,
+      },
+    });
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -177,8 +212,8 @@ async function createClassicCdeFileRun(pool, user, project, body) {
   } finally {
     client.release();
   }
-  await notifyRun(pool, result.rows[0].id);
-  return result.rows[0];
+  await notifyRun(pool, result.id);
+  return result;
 }
 
 async function createApproachRun(pool, user, project, body) {
@@ -258,7 +293,7 @@ async function createApproachRun(pool, user, project, body) {
         selected,
         defaults: {
           danger: 'scripts/api/run.mjs',
-          k6: 'scripts/k6.js',
+          k6: localPack.defaultK6Path('CDE', projectKey),
           playwright: 'scripts/e2e/health.spec.ts',
           unit: localPack.defaultUnitPath('CDE', projectKey),
           root: '.',
@@ -288,7 +323,7 @@ async function createApproachRun(pool, user, project, body) {
         selected,
         defaults: {
           danger: 'scripts/api/run.mjs',
-          k6: 'scripts/k6.js',
+          k6: localPack.defaultK6Path(provider, remoteName),
           playwright: 'scripts/e2e/health.spec.ts',
           unit: localPack.defaultUnitPath(provider, remoteName),
           root: '.',
@@ -318,18 +353,56 @@ async function createApproachRun(pool, user, project, body) {
     throw new RunCreateError('UNSUPPORTED_APPROACH', 'این اپروچ هنوز برای اجرا پشتیبانی نمی‌شود.', 422);
   }
 
+  let normalized;
+  try {
+    normalized = normalizeRunToolConfig(toolKind, {
+      ...body,
+      browserProjects: browsers,
+      timeoutSeconds: body?.timeoutSeconds || settings.rows[0].default_timeout_seconds,
+    }, settings.rows[0]);
+  } catch (error) {
+    if (error instanceof ToolOptionsError) throw new RunCreateError(error.code, error.message, 422);
+    throw error;
+  }
   const timeoutSeconds = timeoutFor(toolKind, {
     flowId,
     approach,
-    fallback: body?.timeoutSeconds || settings.rows[0].default_timeout_seconds,
+    fallback: normalized.timeoutSeconds,
   });
-  const runValues = [
-    projectId, environment.id, testFilePath, sourceSnapshot, browsers, Boolean(body?.headed),
-    Number(body?.workers || settings.rows[0].default_workers), Number(body?.retries || settings.rows[0].default_retries),
-    body?.maxFailures == null || body?.maxFailures === 'unlimited' ? null : Number(body.maxFailures),
-    body?.trace || settings.rows[0].default_trace, body?.reporter || settings.rows[0].default_reporter,
-    timeoutSeconds, user.id, approach, toolKind, toolTarget, packId, flowId, JSON.stringify(reportPaths),
-  ];
+  const requestPart = {
+    browser_projects: normalized.browsers,
+    headed: normalized.headed,
+    workers: normalized.workers,
+    retries: normalized.retries,
+    max_failures: normalized.maxFailures,
+    trace: normalized.trace,
+    reporter: normalized.reporter,
+    timeout_seconds: timeoutSeconds,
+    tool_options: normalized.toolOptions,
+  };
+  try {
+    sourceSnapshot = JSON.stringify(snapshotWithToolOptions(
+      typeof sourceSnapshot === 'string' ? JSON.parse(sourceSnapshot || '{}') : (sourceSnapshot || {}),
+      normalized.toolOptions,
+    ));
+  } catch {
+    /* keep prior sourceSnapshot */
+  }
+  const corePart = {
+    project_id: projectId,
+    environment_id: environment.id,
+    test_file_path: testFilePath,
+    requested_by: user.id,
+    source_approach: approach,
+    tool_kind: toolKind,
+    tool_target: toolTarget,
+    pack_id: packId,
+    flow_id: flowId,
+    report_paths: reportPaths,
+    priority: Number(body?.priority || 0),
+    suite_id: body?.suiteId || null,
+    trigger_source: body?.triggerSource || 'manual',
+  };
 
   if (approach === 'CDE') {
     const live = await pool.query(
@@ -354,17 +427,21 @@ async function createApproachRun(pool, user, project, body) {
         [packId],
       );
       if (ready.rowCount) {
-        const result = await pool.query(
-          `INSERT INTO runs (
-              project_id,environment_id,test_file_path,source_snapshot,browser_projects,headed,workers,retries,
-              max_failures,trace,reporter,timeout_seconds,requested_by,status,source_approach,tool_kind,tool_target,
-              pack_id,flow_id,report_paths,cde_project_key,cde_snapshot_id,cde_manifest
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'QUEUED',$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22::jsonb)
-           RETURNING *`,
-          [...runValues, packId, ready.rows[0].id, JSON.stringify(ready.rows[0].manifest || { projectKey: packId, reused: true })],
-        );
-        await notifyRun(pool, result.rows[0].id);
-        return result.rows[0];
+        const created = await insertRun(pool, {
+          core: {
+            ...corePart,
+            status: 'QUEUED',
+            cde_project_key: packId,
+            cde_snapshot_id: ready.rows[0].id,
+          },
+          request: requestPart,
+          source: {
+            source_snapshot: sourceSnapshot,
+            cde_manifest: ready.rows[0].manifest || { projectKey: packId, reused: true },
+          },
+        });
+        await notifyRun(pool, created.id);
+        return created;
       }
     }
 
@@ -376,18 +453,20 @@ async function createApproachRun(pool, user, project, body) {
          VALUES ($1,$2,$3,'PENDING',$4::jsonb) RETURNING id`,
         [projectId, user.id, user.sessionId, JSON.stringify({ requestedAt: new Date().toISOString(), projectKey: packId, toolKind })],
       );
-      const result = await client.query(
-        `INSERT INTO runs (
-            project_id,environment_id,test_file_path,source_snapshot,browser_projects,headed,workers,retries,
-            max_failures,trace,reporter,timeout_seconds,requested_by,status,source_approach,tool_kind,tool_target,
-            pack_id,flow_id,report_paths,cde_project_key,cde_snapshot_id,logs
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'PREPARING',$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22)
-         RETURNING *`,
-        [...runValues, packId, snapshot.rows[0].id, 'در حال دریافت سورس CDE و ساخت Snapshot. این مرحله خطا نیست و معمولاً حدود یک دقیقه طول می‌کشد.'],
-      );
+      const created = await insertRun(client, {
+        core: {
+          ...corePart,
+          status: 'PREPARING',
+          cde_project_key: packId,
+          cde_snapshot_id: snapshot.rows[0].id,
+        },
+        request: requestPart,
+        source: { source_snapshot: sourceSnapshot },
+        logs: 'در حال دریافت سورس CDE و ساخت Snapshot. این مرحله خطا نیست و معمولاً حدود یک دقیقه طول می‌کشد.',
+      });
       await client.query('COMMIT');
-      await notifyRun(pool, result.rows[0].id);
-      return result.rows[0];
+      await notifyRun(pool, created.id);
+      return created;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -396,17 +475,13 @@ async function createApproachRun(pool, user, project, body) {
     }
   }
 
-  const result = await pool.query(
-    `INSERT INTO runs (
-        project_id,environment_id,test_file_path,source_snapshot,browser_projects,headed,workers,retries,
-        max_failures,trace,reporter,timeout_seconds,requested_by,status,source_approach,tool_kind,tool_target,
-        pack_id,flow_id,report_paths
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'QUEUED',$14,$15,$16,$17,$18,$19::jsonb)
-     RETURNING *`,
-    runValues,
-  );
-  await notifyRun(pool, result.rows[0].id);
-  return result.rows[0];
+  const created = await insertRun(pool, {
+    core: { ...corePart, status: 'QUEUED' },
+    request: requestPart,
+    source: { source_snapshot: sourceSnapshot },
+  });
+  await notifyRun(pool, created.id);
+  return created;
 }
 
 module.exports = { createApproachRun, RunCreateError, ensureEnvironment, ensureWorkspaceProject };

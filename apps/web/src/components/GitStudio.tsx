@@ -10,6 +10,8 @@ import {
 } from './studio';
 import { Button, EmptyState, Input, Loading, Modal, Select, cn, notify } from './ui';
 import { normalizeRun, useRunPoll } from '../useRunPoll';
+import { runConfigToPayload } from '../tool-options';
+import { ToolRunOptionsPanel, useToolRunConfig } from './ToolRunOptions';
 
 const SECTIONS: Array<{ id: SectionId; label: string; folder: string; create?: boolean }> = [
   { id: 'source', label: 'سورس ریپو', folder: '' },
@@ -62,6 +64,7 @@ export function GitStudio({
   const [file, setFile] = useState<OpenFile | null>(null);
   const [query, setQuery] = useState('');
   const [tool, setTool] = useState<ToolKind>('DANGER');
+  const { config: runConfig, setConfig: setRunConfig } = useToolRunConfig(tool);
   const [flowId, setFlowId] = useState('ALL');
   const [flows, setFlows] = useState<string[]>(['ALL']);
   const [running, setRunning] = useState(false);
@@ -286,6 +289,7 @@ export function GitStudio({
           toolKind,
           flowId: flowId || 'ALL',
           testFilePath: file?.path,
+          ...runConfigToPayload(runConfig),
         }),
       });
       setLastRun(normalizeRun({ ...created, toolKind: created.toolKind || toolKind, packId: created.packId || packKey, status: created.status || 'QUEUED' }));
@@ -351,7 +355,8 @@ export function GitStudio({
       onChange={id => setSection(id as SectionId)}
       extra={selected && <a href={selected.htmlUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-blue-300"><ExternalLink className="h-3.5 w-3.5" /><span dir="ltr">{selected.fullName}</span></a>}
     /> : undefined}
-    toolbar={session.connected && selected && section === 'scripts' ? <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+    toolbar={session.connected && selected && section === 'scripts' ? <div className="space-y-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
       <Select value={tool} onChange={event => setTool(event.target.value as ToolKind)} className="min-w-48 bg-slate-900 text-slate-100">
         {TOOLS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
       </Select>
@@ -360,6 +365,8 @@ export function GitStudio({
       </Select>}
       <Button size="sm" loading={running} icon={<Play className="h-3.5 w-3.5" />} onClick={() => void runTool()}>اجرا روی این ریپو</Button>
       {canWrite && <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>}
+      </div>
+      <ToolRunOptionsPanel tool={tool} config={runConfig} onChange={setRunConfig} />
     </div> : (session.connected && selected && section !== 'source' && section !== 'scripts' && canWrite ? <div className="flex justify-end border-b border-slate-800 bg-slate-950/80 px-3 py-2">
       <Button size="sm" variant="secondary" loading={saving} disabled={!dirty} icon={<Save className="h-3.5 w-3.5" />} onClick={() => void saveFile()}>ذخیره</Button>
     </div> : undefined)}

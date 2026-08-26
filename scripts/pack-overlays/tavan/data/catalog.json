@@ -1,0 +1,42 @@
+{
+  "product": "tavan",
+  "sources": [
+    "ds/tavan/app/load",
+    "ds/tavan/bank/folder/load",
+    "ds/tavan/bank/bank/similar-implements-list",
+    "ds/tavan/bank/sessions/list",
+    "ds/tavan/bank/quizzes/list",
+    "ds/tavan/bank/quizzes/one",
+    "ds/tavan/profile/load",
+    "ds/tavan/dashboard/announcements-release/load",
+    "ds/tavan/wall/profile/load",
+    "ds/tavan/classroom/announcements-section-load",
+    "fr/tavan/classroom/create-announcement",
+    "fr/tavan/classroom/edit-announcement",
+    "fr/tavan/dashboard/announcements-release/create"
+  ],
+  "dataProviders": [
+    { "id": "ds/tavan/app/load", "fixture": "app.load", "priority": "P0" },
+    { "id": "ds/tavan/bank/folder/load", "fixture": "bank.folder.load", "priority": "P0" },
+    { "id": "ds/tavan/bank/bank/similar-implements-list", "fixture": "bank.similar.implements", "priority": "P0" },
+    { "id": "ds/tavan/bank/sessions/list", "fixture": "bank.sessions.list", "priority": "P0" },
+    { "id": "ds/tavan/bank/quizzes/list", "fixture": "bank.quizzes.list", "priority": "P0" },
+    { "id": "ds/tavan/bank/quizzes/one", "fixture": "bank.quizzes.one", "priority": "P1" },
+    { "id": "ds/tavan/profile/load", "fixture": "profile.load", "priority": "P1" },
+    { "id": "ds/tavan/dashboard/announcements-release/load", "fixture": "dashboard.announcements.load", "priority": "P1" },
+    { "id": "ds/tavan/wall/profile/load", "fixture": "wall.profile.load", "priority": "P1" },
+    { "id": "ds/tavan/classroom/announcements-section-load", "fixture": "classroom.announcements.load", "priority": "P0" }
+  ],
+  "formProviders": [
+    { "id": "fr/tavan/classroom/create-announcement", "fixture": "announcement.create", "priority": "P0", "command": true },
+    { "id": "fr/tavan/classroom/edit-announcement", "fixture": "announcement.edit", "priority": "P1", "command": true }
+  ],
+  "k6": {
+    "default": "scripts/k6/load.js",
+    "health": "scripts/k6/health.js",
+    "security": "scripts/k6/security-perf.js",
+    "authModel": "runtime-cookie",
+    "journeys": ["cde-express-runtime", "course-context", "hold-sessions", "join-classroom", "join-exam"]
+  },
+  "updatedAt": "2026-08-25T17:10:00.000Z"
+}
