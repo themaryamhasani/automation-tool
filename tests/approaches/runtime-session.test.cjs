@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const {
   parseRuntimeOrigin,
@@ -93,9 +95,60 @@ test('multi-domain cookie import and scoped export', async () => {
   assert.match(headers['https://tavan.medu.ir'], /tavan=app/);
 });
 
+test('Cookie header paste expands into _lsr and companion cookies', async () => {
+  const { normalizeCookieEntries } = require('../../shared/runtime/cookie-export.cjs');
+  const expanded = normalizeCookieEntries([{
+    name: 'Cookie',
+    value: '_gid=GA1.2.x; _lsr=s%3Asession.sig; _ga=GA1.2.y',
+    domain: 'tavan.medu.ir',
+    path: '/',
+    secure: true,
+    httpOnly: true,
+  }]);
+  assert.equal(expanded.length, 3);
+  assert.equal(expanded.find(item => item.name === '_lsr')?.value, 's%3Asession.sig');
+  assert.equal(expanded.find(item => item.name === '_lsr')?.httpOnly, true);
+
+  const state = createRuntimeState('env-1');
+  await importStorageStateIntoState(state, {
+    cookies: [{
+      name: 'Cookie',
+      value: '_gid=GA1.2.x; _lsr=s%3Asession.sig; _ga=GA1.2.y',
+      domain: 'tavan.medu.ir',
+      path: '/',
+      secure: true,
+      httpOnly: true,
+    }],
+  });
+  const header = await cookieHeaderFromState(state, 'https://tavan.medu.ir');
+  assert.match(header, /_lsr=s%3Asession\.sig/);
+  assert.doesNotMatch(header, /(?:^|;\s*)Cookie=/);
+});
+
+test('gitignore only ignores root /runtime/ packs, not api/shared runtime sources', () => {
+  const root = path.resolve(__dirname, '../..');
+  const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+  assert.match(gitignore, /^\/runtime\/\s*$/m);
+  assert.doesNotMatch(gitignore, /^runtime\/\s*$/m);
+  assert.equal(fs.existsSync(path.join(root, 'apps/api/src/runtime/runtime-core-client.cjs')), true);
+  assert.equal(fs.existsSync(path.join(root, 'shared/runtime/app-targets.cjs')), true);
+  assert.equal(fs.existsSync(path.join(root, 'apps/api/src/runtime/auth-handoff.cjs')), true);
+});
+
 test('publicRuntimeStatus reflects connected phase', () => {
   const state = createRuntimeState('env-1');
   state.phase = 'CONNECTED';
   assert.equal(publicRuntimeStatus(state).connected, true);
   assert.equal(publicRuntimeStatus(null).connected, false);
+});
+
+test('runner exports Cookie + Client-Id env from runtime session', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../../apps/runner/src/runtime-session.cjs'),
+    'utf8',
+  );
+  assert.match(source, /PREREG_COOKIE/);
+  assert.match(source, /AUTOMATION_RUNTIME_CLIENT_ID/);
+  assert.match(source, /AUTOMATION_RUNTIME_PROSTAGE/);
+  assert.match(source, /AUTOMATION_RUNTIME_COOKIE_SCOPES/);
 });

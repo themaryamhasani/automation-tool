@@ -14,7 +14,7 @@ function runtimeOriginOf(run, state) {
   if (stored) return stored;
   for (const candidate of [run.gateway_base_url, run.base_url, run.api_base_url]) {
     const value = String(candidate || '').trim().replace(/\/$/, '');
-    if (value && /\.m\.edus\.ir/i.test(value)) return value;
+    if (value && (/\.m\.edus\.ir/i.test(value) || /\.medu\.ir/i.test(value))) return value;
   }
   const projectKey = run.cde_project_key || run.pack_id;
   if (projectKey) {
@@ -35,14 +35,22 @@ async function loadRuntimeSessionEnv(pool, run) {
   if (!state || state.phase !== 'CONNECTED') return {};
   const origin = runtimeOriginOf(run, state);
   const authOrigin = String(state.authOrigin || origin).replace(/\/$/, '');
-  const cookieHeader = await cookieHeaderFromState(state, origin);
-  if (!cookieHeader) return {};
   const target = resolveAppTarget(projectKey, {
     origin,
     authMode: state.authMode || undefined,
   });
   const scopes = target.cookieScopes?.length ? target.cookieScopes : [authOrigin, origin];
   const scopedCookies = await cookieHeadersForScopes(state, scopes);
+  let cookieHeader = await cookieHeaderFromState(state, origin);
+  if (!cookieHeader) cookieHeader = String(scopedCookies[origin] || '').trim();
+  if (!cookieHeader) {
+    cookieHeader = String(Object.values(scopedCookies).find(value => String(value || '').trim()) || '').trim();
+  }
+  if (!cookieHeader) return {};
+  let meduHost = false;
+  try { meduHost = /\.medu\.ir$/i.test(new URL(origin).hostname); } catch { /* ignore */ }
+  const appPath = state.appPath || target.appPath || (meduHost ? '/landing' : '/');
+  const prostage = state.prostage || target.prostage || (meduHost ? 'develop' : '');
   return {
     PREREG_COOKIE: cookieHeader,
     PREREG_BASE_URL: origin,
@@ -55,11 +63,12 @@ async function loadRuntimeSessionEnv(pool, run) {
     AUTOMATION_RUNTIME_AUTH_ORIGIN: authOrigin,
     AUTOMATION_RUNTIME_APP_ORIGIN: origin,
     AUTOMATION_RUNTIME_AUTH_MODE: state.authMode || target.authMode || 'devlogin',
-    AUTOMATION_RUNTIME_PROSTAGE: state.prostage || target.prostage || '',
+    AUTOMATION_RUNTIME_PROSTAGE: prostage || '',
+    AUTOMATION_RUNTIME_CLIENT_ID: state.clientId || '',
     AUTOMATION_RUNTIME_LOGIN_PATH: target.loginPath || '',
     AUTOMATION_RUNTIME_LOGIN_URL: target.loginUrl || '',
-    AUTOMATION_RUNTIME_APP_PATH: target.appPath,
-    AUTOMATION_RUNTIME_APP_URL: target.appUrl,
+    AUTOMATION_RUNTIME_APP_PATH: appPath,
+    AUTOMATION_RUNTIME_APP_URL: `${origin}${appPath}`,
     AUTOMATION_PROJECT_SERVICE_ID: target.projectServiceId || '',
     AUTOMATION_CDE_PROJECT_KEY: projectKey || '',
     AUTOMATION_RUNTIME_COOKIE_SCOPES: JSON.stringify(scopedCookies),

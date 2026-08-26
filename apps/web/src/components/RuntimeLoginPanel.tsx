@@ -323,8 +323,9 @@ export function RuntimeLoginPanel({
                 ) : null}
                 {projectKey === 'tavan' ? (
                   <p className="leading-5 text-blue-700/90">
-                    توان (CI): <code dir="ltr">soha.m.edus.ir</code> · <code dir="ltr">/tavan</code> · serviceId <code dir="ltr">tavan.medu.ir</code>.
-                    برای استیج مدیو حالت <code dir="ltr">soha-gov-sso-handoff</code> را انتخاب کنید.
+                    توان استیج (<code dir="ltr">tavan.medu.ir</code>): حالت <code dir="ltr">soha-gov-sso-handoff</code> —
+                    Cookie دامنه اپ + <code dir="ltr">Client-Id</code> + <code dir="ltr">prostage=develop</code> مثل مرورگر.
+                    CI روی <code dir="ltr">soha.m.edus.ir</code>/<code dir="ltr">/tavan</code> با devlogin است.
                   </p>
                 ) : null}
               </div>
@@ -351,15 +352,20 @@ export function RuntimeLoginPanel({
                 placeholder="https://soha.medu.ir/core-api/v1/data-provider/g/pwsp--medu--sso--get-token/…?clientAccessId=tavan_soha"
               />
               <label className="block text-sm font-medium text-gray-700">
-                Playwright storageState JSON
+                Playwright storageState / Cookie header JSON
                 <textarea
                   className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 font-mono text-xs"
                   dir="ltr"
                   rows={8}
                   value={storageStateJson}
                   onChange={event => setStorageStateJson(event.target.value)}
-                  placeholder={'{\n  "cookies": [{ "name": "...", "value": "...", "domain": ".medu.ir", "path": "/" }]\n}'}
+                  placeholder={'{\n  "cookies": [{\n    "name": "Cookie",\n    "value": "_lsr=...; _ga=...",\n    "domain": "tavan.medu.ir",\n    "path": "/",\n    "secure": true,\n    "httpOnly": true\n  }]\n}'}
                 />
+                <p className="mt-1 text-[11px] leading-5 text-gray-500">
+                  از DevTools → Network → Request Headers مقدار <code dir="ltr">Cookie</code> را بردارید
+                  (یا Application → Cookies). مهم‌ترین کوکی نشست <code dir="ltr">_lsr</code> است؛
+                  فرمت بالا (یک فیلد name=Cookie و value به‌صورت header) هم پشتیبانی می‌شود.
+                </p>
               </label>
             </>
           )}

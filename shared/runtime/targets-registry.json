@@ -1,0 +1,367 @@
+{
+  "medu-community": {
+    "title": "جامعه معلمان",
+    "preferredOrigin": "https://soha.m.edus.ir",
+    "loginPath": "/devlogin",
+    "appPath": "/",
+    "projectServiceId": "medu-community.medu.ir",
+    "roleLandings": {
+      "default": "/"
+    },
+    "authMode": "devlogin",
+    "authProfiles": {
+      "devlogin": {
+        "authMode": "devlogin",
+        "authOrigin": "https://soha.m.edus.ir",
+        "appOrigin": "https://soha.m.edus.ir",
+        "loginPath": "/devlogin",
+        "appPath": "/",
+        "prostage": null,
+        "handoff": null,
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://soha.m.edus.ir"
+        ],
+        "originAllowlist": [
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": "medu-community.medu.ir"
+      }
+    },
+    "apiFixtures": {
+      "auth.load.profile": {
+        "sourceId": "ds/medu-community/auth/load/profile",
+        "params": {}
+      },
+      "repository.load.all": {
+        "sourceId": "ds/medu-community/repository/load/all",
+        "params": {
+          "viewerRole": "hq",
+          "viewerProvinceId": "",
+          "viewerRegionId": "",
+          "viewerCommunityIds": [],
+          "sortBy": "published_at",
+          "sortOrder": "DESC",
+          "limit": 20,
+          "offset": 0
+        }
+      }
+    }
+  },
+  "medu-camp": {
+    "title": "سامانه اردو",
+    "preferredOrigin": "https://adib.m.edus.ir",
+    "loginPath": "/devlogin",
+    "appPath": "/camp/school",
+    "useOriginHostAsServiceId": true,
+    "projectServiceId": "",
+    "authMode": "devlogin",
+    "authProfiles": {
+      "devlogin": {
+        "authMode": "devlogin",
+        "authOrigin": "https://adib.m.edus.ir",
+        "appOrigin": "https://adib.m.edus.ir",
+        "loginPath": "/devlogin",
+        "appPath": "/camp/school",
+        "prostage": null,
+        "handoff": null,
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://adib.m.edus.ir"
+        ],
+        "originAllowlist": [
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": ""
+      }
+    },
+    "roleLandings": {
+      "apps.camp.roles.admin": "/camp/school",
+      "apps.camp.roles.camp:region-expert": "/camp/mantaghe",
+      "apps.camp.roles.camp:center-expert": "/camp/mantaghe",
+      "apps.camp.roles.camp:province-expert": "/camp/ostan",
+      "apps.camp.roles.camp:app-manager": "/camp/setad",
+      "roles.parent": "/camp/parent",
+      "default": "/camp/dashboard"
+    },
+    "apiFixtures": {
+      "server.time": {
+        "sourceId": "ds/medu-camp/server/time",
+        "params": {}
+      },
+      "roles.and.organs": {
+        "sourceId": "ds/medu-camp/roles-and-organs",
+        "params": {
+          "appName": "camp"
+        }
+      },
+      "camp.load": {
+        "sourceId": "ds/medu-camp/camp/load",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "camp.load.organ": {
+        "sourceId": "ds/medu-camp/camp/load/organ",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "camp.status.counts": {
+        "sourceId": "ds/medu-camp/camp/status-counts",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "organ.camps.load": {
+        "sourceId": "ds/medu-camp/organ/camps/load",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "ostan.reports.camps.load": {
+        "sourceId": "ds/medu-camp/ostan/reports/camps/load",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "mantaghe.camps.load": {
+        "sourceId": "ds/medu-camp/mantaghe/camps/load",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "out.school.load": {
+        "sourceId": "ds/medu-camp/camp/out-of-school/load",
+        "params": {
+          "organPath": ""
+        }
+      },
+      "camp.create": {
+        "sourceId": "fr/medu-camp/camp",
+        "params": {},
+        "command": true
+      },
+      "camp.update.status": {
+        "sourceId": "fr/medu-camp/camp/update-status",
+        "params": {},
+        "command": true
+      }
+    }
+  },
+  "finalMedu": {
+    "title": "امتحان نهایی",
+    "preferredOrigin": "https://adib.m.edus.ir",
+    "loginPath": "/devlogin",
+    "appPath": "/",
+    "projectServiceId": "final-medu.medu.ir",
+    "roleLandings": {
+      "default": "/"
+    },
+    "authMode": "devlogin",
+    "authProfiles": {
+      "devlogin": {
+        "authMode": "devlogin",
+        "authOrigin": "https://adib.m.edus.ir",
+        "appOrigin": "https://adib.m.edus.ir",
+        "loginPath": "/devlogin",
+        "appPath": "/",
+        "prostage": null,
+        "handoff": null,
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://adib.m.edus.ir"
+        ],
+        "originAllowlist": [
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": "final-medu.medu.ir"
+      }
+    },
+    "apiFixtures": {}
+  },
+  "final-medu": {
+    "title": "امتحان نهایی",
+    "preferredOrigin": "https://adib.m.edus.ir",
+    "loginPath": "/devlogin",
+    "appPath": "/",
+    "projectServiceId": "final-medu.medu.ir",
+    "roleLandings": {
+      "default": "/"
+    },
+    "authMode": "devlogin",
+    "authProfiles": {
+      "devlogin": {
+        "authMode": "devlogin",
+        "authOrigin": "https://adib.m.edus.ir",
+        "appOrigin": "https://adib.m.edus.ir",
+        "loginPath": "/devlogin",
+        "appPath": "/",
+        "prostage": null,
+        "handoff": null,
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://adib.m.edus.ir"
+        ],
+        "originAllowlist": [
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": "final-medu.medu.ir"
+      }
+    },
+    "apiFixtures": {}
+  },
+  "tavan": {
+    "title": "سامانه توان",
+    "preferredOrigin": "https://soha.m.edus.ir",
+    "loginPath": "/devlogin",
+    "appPath": "/tavan",
+    "projectServiceId": "tavan.medu.ir",
+    "useOriginHostAsServiceId": false,
+    "authMode": "devlogin",
+    "authProfiles": {
+      "devlogin": {
+        "authMode": "devlogin",
+        "authOrigin": "https://soha.m.edus.ir",
+        "appOrigin": "https://soha.m.edus.ir",
+        "loginPath": "/devlogin",
+        "appPath": "/tavan",
+        "prostage": null,
+        "handoff": null,
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://soha.m.edus.ir"
+        ],
+        "originAllowlist": [
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": "tavan.medu.ir"
+      },
+      "soha-gov-sso-handoff": {
+        "authMode": "soha-gov-sso-handoff",
+        "authOrigin": "https://soha.medu.ir",
+        "appOrigin": "https://tavan.medu.ir",
+        "loginPath": null,
+        "appPath": "/landing",
+        "prostage": "develop",
+        "handoff": {
+          "type": "soha-sso-get-token",
+          "clientAccessId": "tavan_soha",
+          "pathTemplate": "/core-api/v1/data-provider/g/pwsp--medu--sso--get-token/{tokenId}?clientAccessId={clientAccessId}"
+        },
+        "readyCheck": {
+          "key": "pages-app/who-am-i",
+          "expectLogin": true
+        },
+        "cookieScopes": [
+          "https://soha.medu.ir",
+          "https://tavan.medu.ir"
+        ],
+        "originAllowlist": [
+          "*.medu.ir",
+          "*.m.edus.ir"
+        ],
+        "projectServiceId": "tavan.medu.ir"
+      }
+    },
+    "roleLandings": {
+      "roles.admin": "/tavan",
+      "default": "/tavan",
+      "emis:fragier": "/classroom"
+    },
+    "preferredOrganPath": "IR2O2",
+    "preferredCourseId": "CC05110111PL1IM1",
+    "apiFixtures": {
+      "who.am.i": {
+        "sourceId": "pages-app/who-am-i",
+        "params": {}
+      },
+      "app.load": {
+        "sourceId": "ds/tavan/app/load",
+        "params": {}
+      },
+      "profile.load": {
+        "sourceId": "ds/tavan/profile/load",
+        "params": {}
+      },
+      "bank.folder.load": {
+        "sourceId": "ds/tavan/bank/folder/load",
+        "params": {
+          "app": "tavan",
+          "course_id": "CC05110111PL1IM1"
+        }
+      },
+      "bank.quizzes.list": {
+        "sourceId": "ds/tavan/bank/quizzes/list",
+        "params": {
+          "course_id": "CC05110111PL1IM1"
+        }
+      },
+      "classroom.announcements.load": {
+        "sourceId": "ds/tavan/classroom/announcements-section-load",
+        "params": {
+          "course": "CC05110111PL1IM1"
+        }
+      },
+      "dashboard.announcements.load": {
+        "sourceId": "ds/tavan/dashboard/announcements-release/load",
+        "params": {
+          "path": "IR2O2"
+        }
+      },
+      "wall.profile.load": {
+        "sourceId": "ds/tavan/wall/profile/load",
+        "params": {}
+      },
+      "announcement.create": {
+        "sourceId": "fr/tavan/classroom/create-announcement",
+        "params": {},
+        "command": true
+      },
+      "announcement.edit": {
+        "sourceId": "fr/tavan/classroom/edit-announcement",
+        "params": {},
+        "command": true
+      },
+      "dashboard.announcement.create": {
+        "sourceId": "fr/tavan/dashboard/announcements-release/create",
+        "params": {},
+        "command": true
+      },
+      "bank.similar.implements": {
+        "sourceId": "ds/tavan/bank/bank/similar-implements-list",
+        "params": {
+          "course_id": "CC05110111PL1IM1"
+        }
+      },
+      "bank.sessions.list": {
+        "sourceId": "ds/tavan/bank/sessions/list",
+        "params": {
+          "course_id": "CC05110111PL1IM1"
+        }
+      },
+      "bank.quizzes.one": {
+        "sourceId": "ds/tavan/bank/quizzes/one",
+        "params": {
+          "rand_id": "",
+          "course_id": "CC05110111PL1IM1"
+        }
+      }
+    }
+  }
+}
