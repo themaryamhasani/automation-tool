@@ -4,6 +4,7 @@ const { getCdeSession, setCdeSession, deleteCdeSession } = require('./session-st
 const { compileDataServicePackage, normalizeSourcePath } = require('./data-service-compiler.cjs');
 const { encryptText } = require('../../../../shared/snapshot-crypto.cjs');
 const { shouldKeepRuntimePackage, savedIdsFor } = require('./snapshot-focus.cjs');
+const { expandSnapshotDependencies, packIdCandidates } = require('./snapshot-deps.cjs');
 const { excerptLogs, notifyRun } = require('../../../../shared/log-excerpt.cjs');
 const { setRunLogs, setRunSourceManifest } = require('../../../../shared/db/run-store.cjs');
 
@@ -52,6 +53,9 @@ function remoteFiles(branch, type, packId) {
   if (!Array.isArray(files)) throw Object.assign(new Error('شاخه انتخاب‌شده آرایه فایل سورس ندارد.'), { code: 'CDE_SCHEMA_ERROR', status: 502 });
   return files.map(file => ({ path: normalizeSourcePath(file.name), code: String(file.code ?? '') }));
 }
+function rootForType(type) {
+  return REPOSITORIES[type]?.root || String(type || '').toLowerCase().replace(/_/g, '-');
+}
 
 async function reportProgress(pool, snapshot, info) {
   const message = String(info.message || 'در حال دریافت سورس CDE…').slice(0, 500);
@@ -82,6 +86,16 @@ async function call(pool, sessionId, state, key, params = {}) {
   return result;
 }
 
+function selectBranch(item, type, repoName, packId, savedSelections, runtimeSnapshot) {
+  const branches = branchRows(item);
+  const saved = savedSelections.find(row => row.repository_type === type && row.repo_name === repoName && row.pack_id === packId);
+  const selected = branches.find(branch => selectorMatches(branch, saved))
+    || branches.find(branch => branch.selector.kind === 'PUBLIC')
+    || (runtimeSnapshot ? branches[0] : null)
+    || (branches.length === 1 ? branches[0] : null);
+  return { branches, selected };
+}
+
 async function buildSnapshot(pool, snapshot) {
   let state = await getCdeSession(pool, snapshot.initiating_session_id);
   if (!state) throw Object.assign(new Error('نشست CDE سازندهٔ اجرا در دسترس نیست.'), { code: 'CDE_RECONNECT_REQUIRED', status: 409 });
@@ -105,6 +119,69 @@ async function buildSnapshot(pool, snapshot) {
   const runtimeSnapshot = Boolean(snapshot.tool_kind);
   let apiKept = 0;
   let webKept = 0;
+  const listCache = new Map();
+
+  const appendPackage = ({
+    repositoryType,
+    repoName,
+    packId,
+    selector,
+    versionId,
+    packageFiles,
+    dependency = false,
+    external = false,
+    requestedSpec = null,
+  }) => {
+    const root = rootForType(repositoryType);
+    const manifestFiles = [];
+    for (const file of packageFiles) {
+      const target = `${root}/packages/${safePackage(packId)}/source/${file.path}`;
+      addFile(files, paths, { path: target, code: file.code, repositoryType, repoName, packId, versionId });
+      totalBytes += Buffer.byteLength(file.code);
+      manifestFiles.push({ path: target, sourceHash: hash(file.code) });
+    }
+    if (repositoryType === 'DATA_SERVICE') {
+      const build = compileDataServicePackage(packageFiles.map(file => ({ name: file.path, code: file.code })));
+      for (const file of build) {
+        const target = `${root}/packages/${safePackage(packId)}/build/${file.name}`;
+        addFile(files, paths, { path: target, code: file.build, repositoryType: 'DATA_SERVICE_BUILD', repoName, packId, versionId });
+        totalBytes += Buffer.byteLength(file.build);
+        manifestFiles.push({ path: target, sourceHash: hash(file.build), compiled: true });
+      }
+    }
+    packages.push({
+      repositoryType,
+      repoName,
+      packId,
+      selector,
+      versionId,
+      files: manifestFiles,
+      ...(dependency ? { dependency: true } : {}),
+      ...(external ? { external: true } : {}),
+      ...(requestedSpec ? { requestedSpec } : {}),
+    });
+    if (totalBytes > MAX_SNAPSHOT_BYTES) throw Object.assign(new Error('حجم Snapshot CDE از سقف مجاز بیشتر شد.'), { code: 'CDE_SNAPSHOT_TOO_LARGE', status: 413 });
+  };
+
+  async function listRepository(type, repoName) {
+    const cacheKey = `${type}::${repoName}`;
+    if (listCache.has(cacheKey)) return listCache.get(cacheKey);
+    const config = REPOSITORIES[type];
+    ({ state, response } = await call(pool, snapshot.initiating_session_id, state, config.key, { repoName }));
+    const listed = itemsOf(response);
+    listCache.set(cacheKey, listed);
+    return listed;
+  }
+
+  async function loadPackItem(type, repoName, packId) {
+    if (type === 'API_MODULE') {
+      const listed = await listRepository(type, repoName);
+      const hit = listed.find(item => String(item?.id || item?._id || item || '') === packId);
+      if (hit) return hit;
+    }
+    ({ state, response } = await call(pool, snapshot.initiating_session_id, state, 'cde/package/any/one/fetch', { repoName, packId }));
+    return resultOf(response).pack || null;
+  }
 
   for (const [type, config] of Object.entries(REPOSITORIES)) {
     if (runtimeSnapshot && (type === 'DATA_SERVICE' || type === 'MESSAGE_CONSUMER')) {
@@ -115,8 +192,7 @@ async function buildSnapshot(pool, snapshot) {
     if (!repoName) continue;
     let listed;
     try {
-      ({ state, response } = await call(pool, snapshot.initiating_session_id, state, config.key, { repoName }));
-      listed = itemsOf(response);
+      listed = await listRepository(type, repoName);
     } catch (error) {
       if (type === 'DATA_SERVICE' || runtimeSnapshot) {
         warnings.push({ repositoryType: type, repoName, code: error.code || 'CDE_REPOSITORY_UNAVAILABLE', message: error.message });
@@ -139,8 +215,7 @@ async function buildSnapshot(pool, snapshot) {
       let item = listedItem;
       if (type !== 'API_MODULE') {
         try {
-          ({ state, response } = await call(pool, snapshot.initiating_session_id, state, 'cde/package/any/one/fetch', { repoName, packId }));
-          item = resultOf(response).pack;
+          item = await loadPackItem(type, repoName, packId);
         } catch (error) {
           if (!runtimeSnapshot) throw error;
           warnings.push({ repositoryType: type, repoName, packId, code: error.code || 'CDE_PACKAGE_FETCH_FAILED', message: error.message });
@@ -154,12 +229,7 @@ async function buildSnapshot(pool, snapshot) {
         }
         throw Object.assign(new Error(`پکیج ${packId} از CDE دریافت نشد.`), { code: 'CDE_PACKAGE_NOT_FOUND', status: 404 });
       }
-      const branches = branchRows(item);
-      const saved = savedSelections.find(row => row.repository_type === type && row.repo_name === repoName && row.pack_id === packId);
-      const selected = branches.find(branch => selectorMatches(branch, saved))
-        || branches.find(branch => branch.selector.kind === 'PUBLIC')
-        || (runtimeSnapshot ? branches[0] : null)
-        || (branches.length === 1 ? branches[0] : null);
+      const { branches, selected } = selectBranch(item, type, repoName, packId, savedSelections, runtimeSnapshot);
       if (!selected) {
         if (runtimeSnapshot) {
           warnings.push({ repositoryType: type, repoName, packId, code: 'BRANCH_SELECTION_REQUIRED', message: `برای پکیج ${packId} شاخه‌ای در دسترس نبود.` });
@@ -177,24 +247,7 @@ async function buildSnapshot(pool, snapshot) {
         warnings.push({ repositoryType: type, repoName, packId, code: error.code || 'CDE_PACKAGE_SOURCE_INVALID', message: error.message });
         continue;
       }
-      const manifestFiles = [];
-      for (const file of packageFiles) {
-        const target = `${config.root}/packages/${safePackage(packId)}/source/${file.path}`;
-        addFile(files, paths, { path: target, code: file.code, repositoryType: type, repoName, packId, versionId: selected.versionId });
-        totalBytes += Buffer.byteLength(file.code);
-        manifestFiles.push({ path: target, sourceHash: hash(file.code) });
-      }
-      if (type === 'DATA_SERVICE') {
-        const build = compileDataServicePackage(packageFiles.map(file => ({ name: file.path, code: file.code })));
-        for (const file of build) {
-          const target = `${config.root}/packages/${safePackage(packId)}/build/${file.name}`;
-          addFile(files, paths, { path: target, code: file.build, repositoryType: 'DATA_SERVICE_BUILD', repoName, packId, versionId: selected.versionId });
-          totalBytes += Buffer.byteLength(file.build);
-          manifestFiles.push({ path: target, sourceHash: hash(file.build), compiled: true });
-        }
-      }
-      packages.push({ repositoryType: type, repoName, packId, selector: selected.selector, versionId: selected.versionId, files: manifestFiles });
-      if (totalBytes > MAX_SNAPSHOT_BYTES) throw Object.assign(new Error('حجم Snapshot CDE از سقف مجاز بیشتر شد.'), { code: 'CDE_SNAPSHOT_TOO_LARGE', status: 413 });
+      appendPackage({ repositoryType: type, repoName, packId, selector: selected.selector, versionId: selected.versionId, packageFiles });
       if (type === 'WEB_UI' || packages.length === 1 || packages.length % 8 === 0) {
         await reportProgress(pool, snapshot, {
           phase: 'fetch',
@@ -208,6 +261,53 @@ async function buildSnapshot(pool, snapshot) {
     }
   }
 
+  await expandSnapshotDependencies({
+    files,
+    packages,
+    paths,
+    warnings,
+    projectKey,
+    addPackageFiles: (entry) => {
+      appendPackage({
+        repositoryType: entry.repositoryType,
+        repoName: entry.repoName,
+        packId: entry.packId,
+        selector: entry.selector,
+        versionId: entry.versionId,
+        packageFiles: entry.files,
+        dependency: entry.dependency,
+        external: entry.external,
+        requestedSpec: entry.requestedSpec,
+      });
+    },
+    fetchResolved: async (resolved) => {
+      const candidates = resolved.candidates?.length ? resolved.candidates : packIdCandidates(resolved.packId, resolved.repositoryType);
+      let lastError = null;
+      for (const candidate of candidates) {
+        try {
+          const item = await loadPackItem(resolved.repositoryType, resolved.repoName, candidate);
+          if (!item || typeof item !== 'object') continue;
+          const { selected } = selectBranch(item, resolved.repositoryType, resolved.repoName, candidate, savedSelections, true);
+          if (!selected) continue;
+          const packageFiles = remoteFiles(selected, resolved.repositoryType, candidate);
+          return {
+            repositoryType: resolved.repositoryType,
+            repoName: resolved.repoName,
+            packId: candidate,
+            selector: selected.selector,
+            versionId: selected.versionId,
+            files: packageFiles,
+          };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (lastError) throw lastError;
+      return null;
+    },
+    reportProgress: (info) => reportProgress(pool, snapshot, info),
+  });
+
   const testRows = await pool.query('SELECT id,folder_path,file_name,source_code,revision,cde_binding FROM test_files WHERE project_id=$1 ORDER BY folder_path,file_name', [snapshot.project_id]);
   const testManifest = [];
   for (const test of testRows.rows) {
@@ -220,6 +320,8 @@ async function buildSnapshot(pool, snapshot) {
   }
   packages.push({ repositoryType: 'TESTS', storage: 'POSTGRESQL', repoName: mapping?.test_repo_name || `playwright/${projectKey}`, packId: mapping?.test_pack_id || `playwright/${projectKey}`, versionId: hash(JSON.stringify(testManifest)), files: testManifest });
   files.sort((left, right) => left.path.localeCompare(right.path));
+  const dependencyPackages = packages.filter(item => item.dependency).length;
+  const externalPackages = packages.filter(item => item.external).length;
   const manifest = {
     format: 2,
     serviceId: mapping?.service_id || 'cde.edus.ir',
@@ -229,6 +331,8 @@ async function buildSnapshot(pool, snapshot) {
     environment: { id: snapshot.environment_id, name: snapshot.environment_name, webBaseUrl: snapshot.base_url, apiBaseUrl: snapshot.api_base_url, gatewayBaseUrl: snapshot.gateway_base_url, availability: { from: snapshot.available_from, until: snapshot.available_until } },
     packages,
     warnings,
+    dependencyPackages,
+    externalPackages,
     fileCount: files.length,
     totalBytes,
   };
@@ -284,7 +388,7 @@ async function complete(pool, snapshot, bundle) {
     );
     await client.query("UPDATE runs SET status='QUEUED', updated_at=now() WHERE id=$1 AND status='PREPARING'", [snapshot.run_id]);
     await setRunSourceManifest(client, snapshot.run_id, bundle.manifest);
-    await client.query("INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('CDE_SNAPSHOT_READY','RUN',$1,$2::jsonb)", [snapshot.run_id, JSON.stringify({ snapshotId: snapshot.id, contentHash: bundle.contentHash, fileCount: bundle.files.length })]);
+    await client.query("INSERT INTO audit_logs (action,entity_type,entity_id,metadata) VALUES ('CDE_SNAPSHOT_READY','RUN',$1,$2::jsonb)", [snapshot.run_id, JSON.stringify({ snapshotId: snapshot.id, contentHash: bundle.contentHash, fileCount: bundle.files.length, dependencyPackages: bundle.manifest.dependencyPackages || 0 })]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
@@ -326,4 +430,4 @@ function startCdeSnapshotWorker(pool) {
   return () => { stopped = true; clearInterval(timer); };
 }
 
-module.exports = { startCdeSnapshotWorker };
+module.exports = { startCdeSnapshotWorker, buildSnapshot };

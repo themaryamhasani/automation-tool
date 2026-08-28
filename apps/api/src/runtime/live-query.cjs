@@ -22,22 +22,29 @@ function env(name, fallback = '') {
 }
 
 function buildProfile(projectKey, overrides = {}) {
+  const authMode = overrides.authMode || env('AUTOMATION_RUNTIME_AUTH_MODE') || undefined;
   const target = resolveAppTarget(projectKey, {
     origin: overrides.origin || env('AUTOMATION_RUNTIME_ORIGIN') || env('PREREG_BASE_URL') || undefined,
     projectServiceId: overrides.projectServiceId || env('AUTOMATION_PROJECT_SERVICE_ID') || undefined,
     appPath: overrides.appPath || env('AUTOMATION_RUNTIME_APP_PATH') || undefined,
     loginPath: overrides.loginPath || env('AUTOMATION_RUNTIME_LOGIN_PATH') || undefined,
+    authMode,
   });
   if (!target.origin) throw new Error('RUNTIME_ORIGIN_REQUIRED');
   return normalizedProfile({
     id: `${projectKey || 'runtime'}-live`,
-    origin: target.origin,
+    origin: target.appOrigin || target.origin,
+    authOrigin: target.authOrigin || target.origin,
+    appOrigin: target.appOrigin || target.origin,
     projectServiceId: target.projectServiceId,
     loginPath: target.loginPath,
     coreBasePath: env('RUNTIME_DEFAULT_CORE_BASE_PATH') || '/core-api/v1',
     appRefererPath: target.appPath || '/',
     userSource: env('RUNTIME_DEFAULT_USER_SOURCE') || 'medugovir',
-    prostage: overrides.prostage || env('RUNTIME_PROSTAGE') || undefined,
+    authMode: target.authMode || authMode || 'devlogin',
+    prostage: overrides.prostage || env('AUTOMATION_RUNTIME_PROSTAGE') || env('RUNTIME_PROSTAGE') || target.prostage || undefined,
+    originAllowlist: target.originAllowlist,
+    readyCheck: target.readyCheck,
   });
 }
 

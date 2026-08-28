@@ -1,10 +1,20 @@
 import { check, sleep } from 'k6';
-import { courseId, dpGet, liveOrigin, serviceId, statusOk } from './_client.js';
+import {
+  coreBase,
+  courseId,
+  dpGet,
+  liveAppPath,
+  liveOrigin,
+  runtimeProstage,
+  runtimeClientId,
+  serviceId,
+  statusOk,
+} from './_client.js';
 import http from 'k6/http';
 
 /**
  * Security-perf: unauthenticated + abuse against live data-provider.
- * No MyMedu / SSO / login path — intentionally cookie-less.
+ * Intentionally omits Cookie (same path/headers shape as live, without session).
  */
 export const options = {
   vus: 1000,
@@ -15,17 +25,27 @@ export const options = {
   },
 };
 
+function unauthHeaders() {
+  const origin = liveOrigin();
+  const headers = {
+    'Content-Type': 'application/json; charset=UTF-8',
+    Accept: 'application/json',
+    Origin: origin,
+    Referer: `${origin}${liveAppPath()}`,
+  };
+  const clientId = runtimeClientId();
+  if (clientId) headers['Client-Id'] = clientId;
+  const prostage = runtimeProstage();
+  if (prostage) headers.prostage = prostage;
+  return headers;
+}
+
 export default function () {
   const live = liveOrigin();
-  const headers = {
-    'content-type': 'application/json; charset=UTF-8',
-    accept: 'application/json',
-    origin: live,
-    referer: `${live}/tavan`,
-  };
+  const headers = unauthHeaders();
 
   const noAuth = http.post(
-    `${live}/core-api/v1/data-provider/get-data-source`,
+    `${live}${coreBase()}/data-provider/get-data-source`,
     JSON.stringify({ serviceId: serviceId(), key: 'tavan/app/load', params: {} }),
     { headers, tags: { name: 'sec.unauth.app.load' } },
   );
@@ -40,11 +60,10 @@ export default function () {
     { course_id: 'qa-fake-course-99999999' },
     { name: 'sec.fake.quizzes' },
   );
-  // Without cookie, helper still posts; assert no 5xx flood.
   check(fakeCourse, { 'fake course not 5xx': statusOk });
 
   const fakeSessions = http.post(
-    `${live}/core-api/v1/data-provider/get-data-source`,
+    `${live}${coreBase()}/data-provider/get-data-source`,
     JSON.stringify({
       serviceId: serviceId(),
       key: 'tavan/bank/sessions/list',

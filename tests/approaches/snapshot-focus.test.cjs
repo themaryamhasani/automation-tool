@@ -31,3 +31,16 @@ test('CDE_SNAPSHOT_WEB_FOCUS overrides the default community regex', () => {
     else process.env.CDE_SNAPSHOT_WEB_FOCUS = previous;
   }
 });
+
+test('required dependency ids bypass web trim and selection filters', () => {
+  const requiredIds = new Set(['parham/lib/packs/translate']);
+  assert.equal(shouldKeepRuntimePackage('WEB_UI', 'parham/lib/packs/translate', { requiredIds, webKept: 99 }).keep, true);
+  const savedIds = new Set(['pages/other']);
+  assert.equal(
+    shouldKeepRuntimePackage('WEB_UI', 'pages/component/tavan/components/BForm', {
+      savedIds,
+      requiredIds: new Set(['tavan/components/BForm']),
+    }).keep,
+    true,
+  );
+});

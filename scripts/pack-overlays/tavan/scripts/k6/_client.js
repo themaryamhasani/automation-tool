@@ -1,7 +1,12 @@
 /**
- * Shared k6 client for tavan CDE packs.
- * Auth: uses runtime session cookie already injected by the runner (PREREG_COOKIE).
- * Does NOT perform MyMedu / SSO / devlogin — those belong outside load scripts.
+ * Shared k6 client for tavan — mirrors live browser data-provider calls.
+ *
+ * Live shape (tavan.medu.ir DevTools):
+ *   POST {origin}/core-api/v1/data-provider/get-data-source
+ *   Cookie / Client-Id / prostage / Origin / Referer / Content-Type
+ *
+ * Auth cookie comes from Runtime Login → runner injects PREREG_COOKIE.
+ * Does NOT perform MyMedu / SSO / devlogin inside the script.
  */
 import http from 'k6/http';
 import { check } from 'k6';
@@ -10,21 +15,32 @@ export function env(name, fallback = '') {
   return String(__ENV[name] ?? fallback).trim();
 }
 
-/** Local CDE express runtime produced by this automation tool. */
-export function expressBase() {
-  return env('AUTOMATION_RUNTIME_URL', env('BASE_URL', 'http://127.0.0.1:4520')).replace(/\/$/, '');
+function isMeduOrigin(origin) {
+  try {
+    return /\.medu\.ir$/i.test(new URL(String(origin || '')).hostname);
+  } catch {
+    return false;
+  }
 }
 
-/** Live app origin used for data-provider calls (cookie scoped there by runtime session). */
+/** Local CDE express runtime produced by this automation tool. */
+export function expressBase() {
+  return env('AUTOMATION_RUNTIME_URL', 'http://127.0.0.1:4520').replace(/\/$/, '');
+}
+
+/** Live app origin (cookie-scoped). Prefer app origin from runtime session. */
 export function liveOrigin() {
   return env(
-    'AUTOMATION_RUNTIME_ORIGIN',
-    env('AUTOMATION_RUNTIME_APP_ORIGIN', env('PREREG_BASE_URL', 'https://soha.m.edus.ir')),
+    'AUTOMATION_RUNTIME_APP_ORIGIN',
+    env('AUTOMATION_RUNTIME_ORIGIN', env('PREREG_BASE_URL', 'https://tavan.medu.ir')),
   ).replace(/\/$/, '');
 }
 
+/** /landing on *.medu.ir (stage), /tavan on *.m.edus.ir (CI). */
 export function liveAppPath() {
-  return env('AUTOMATION_RUNTIME_APP_PATH', '/tavan') || '/tavan';
+  const explicit = env('AUTOMATION_RUNTIME_APP_PATH', '');
+  if (explicit) return explicit;
+  return isMeduOrigin(liveOrigin()) ? '/landing' : '/tavan';
 }
 
 export function coreBase() {
@@ -35,7 +51,6 @@ export function serviceId() {
   return env('AUTOMATION_PROJECT_SERVICE_ID', 'tavan.medu.ir');
 }
 
-/** Course / organ from pack defaults or runner env — not discovered via login. */
 export function courseId() {
   return env('TAVAN_COURSE_ID', env('AUTOMATION_TAVAN_COURSE_ID', 'CC05110111PL1IM1'));
 }
@@ -44,51 +59,86 @@ export function organPath() {
   return env('TAVAN_ORGAN_PATH', env('AUTOMATION_TAVAN_ORGAN_PATH', 'IR2O2'));
 }
 
+export function runtimeClientId() {
+  return env('AUTOMATION_RUNTIME_CLIENT_ID', env('RUNTIME_CLIENT_ID', ''));
+}
+
+export function runtimeProstage() {
+  const explicit = env('AUTOMATION_RUNTIME_PROSTAGE', '');
+  if (explicit) return explicit;
+  return isMeduOrigin(liveOrigin()) ? 'develop' : '';
+}
+
+/** Cookie header value — same role as browser Cookie on get-data-source. */
 export function runtimeCookie() {
-  return env('PREREG_COOKIE', env('TAVAN_COOKIE', ''));
+  const direct = env('PREREG_COOKIE', env('TAVAN_COOKIE', ''));
+  if (direct) return direct;
+  try {
+    const scopes = JSON.parse(env('AUTOMATION_RUNTIME_COOKIE_SCOPES', '{}') || '{}');
+    const origin = liveOrigin();
+    return String(scopes[origin] || scopes[`${origin}/`] || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 export function hasRuntimeAuth() {
   return Boolean(runtimeCookie());
 }
 
+/**
+ * Headers aligned with live tavan.medu.ir request.
+ * Cookie is the session; Client-Id + prostage match API-CONSOLE / stage gateway.
+ */
 export function liveHeaders(extra = {}) {
+  const origin = liveOrigin();
   const headers = {
-    'content-type': 'application/json; charset=UTF-8',
-    accept: 'application/json',
-    origin: liveOrigin(),
-    referer: `${liveOrigin()}${liveAppPath()}`,
-    ...extra,
+    'Content-Type': 'application/json; charset=UTF-8',
+    Accept: 'application/json',
+    Origin: origin,
+    Referer: `${origin}${liveAppPath()}`,
   };
   const cookie = runtimeCookie();
-  if (cookie) headers.cookie = cookie;
-  return headers;
+  if (cookie) headers.Cookie = cookie;
+  const clientId = runtimeClientId();
+  if (clientId) headers['Client-Id'] = clientId;
+  const prostage = runtimeProstage();
+  if (prostage) headers.prostage = prostage;
+  return { ...headers, ...extra };
 }
 
 function bareKey(sourceId) {
   return String(sourceId || '').replace(/^ds\//, '').replace(/^fr\//, '');
 }
 
+function dpUrl(endpoint) {
+  return `${liveOrigin()}${coreBase()}/data-provider/${endpoint}`;
+}
+
 /** GET-style data-provider (ds/…). */
 export function dpGet(sourceId, params = {}, tags = {}) {
-  const url = `${liveOrigin()}${coreBase()}/data-provider/get-data-source`;
   const body = JSON.stringify({
     serviceId: serviceId(),
     key: bareKey(sourceId),
     params,
   });
-  return http.post(url, body, { headers: liveHeaders(), tags: { name: bareKey(sourceId), ...tags } });
+  return http.post(dpUrl('get-data-source'), body, {
+    headers: liveHeaders(),
+    tags: { name: bareKey(sourceId), ...tags },
+  });
 }
 
 /** Command / form store (fr/…). */
 export function dpCmd(formId, data = {}, tags = {}) {
-  const url = `${liveOrigin()}${coreBase()}/data-provider/store-form-data`;
   const body = JSON.stringify({
     serviceId: serviceId(),
     formId: bareKey(formId),
     data,
   });
-  return http.post(url, body, { headers: liveHeaders(), tags: { name: bareKey(formId), ...tags } });
+  return http.post(dpUrl('store-form-data'), body, {
+    headers: liveHeaders(),
+    tags: { name: bareKey(formId), ...tags },
+  });
 }
 
 export function statusOk(res) {
@@ -110,7 +160,7 @@ export function logicalResult(res) {
 
 export function requireRuntimeAuth(checks = {}) {
   const ok = hasRuntimeAuth();
-  check(null, { 'runtime cookie present (PREREG_COOKIE)': () => ok, ...checks });
+  check(null, { 'runtime Cookie present (PREREG_COOKIE)': () => ok, ...checks });
   return ok;
 }
 

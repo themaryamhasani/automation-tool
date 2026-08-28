@@ -135,6 +135,18 @@ test('gitignore only ignores root /runtime/ packs, not api/shared runtime source
   assert.equal(fs.existsSync(path.join(root, 'apps/api/src/runtime/auth-handoff.cjs')), true);
 });
 
+test('tavan danger lib hydrates runtime session from PREREG_COOKIE', () => {
+  const root = path.resolve(__dirname, '../..');
+  const overlay = fs.readFileSync(path.join(root, 'scripts/pack-overlays/tavan/scripts/api/lib.mjs'), 'utf8');
+  const packed = fs.readFileSync(path.join(root, 'runtime/packs/cde/tavan/scripts/api/lib.mjs'), 'utf8');
+  for (const source of [overlay, packed]) {
+    assert.match(source, /hydrateSessionFromEnvCookie/);
+    assert.match(source, /liveRequestHeaders|client-id|prostage/);
+    assert.match(source, /PREREG_COOKIE/);
+    assert.doesNotMatch(source, /if \(env\('PREREG_COOKIE'\) \|\| env\('TAVAN_COOKIE'\)\) return \{ ok: true, source: 'env-cookie' \};/);
+  }
+});
+
 test('publicRuntimeStatus reflects connected phase', () => {
   const state = createRuntimeState('env-1');
   state.phase = 'CONNECTED';

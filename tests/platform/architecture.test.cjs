@@ -197,6 +197,19 @@ test('imported Playwright files use the standalone PostgreSQL CDE binding', asyn
   } finally { await client.end(); }
 });
 
+test('CDE snapshot dependency resolution lives outside server.cjs', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const server = fs.readFileSync(path.join(root, 'apps/api/src/server.cjs'), 'utf8');
+  const worker = fs.readFileSync(path.join(root, 'apps/api/src/cde/snapshot-worker.cjs'), 'utf8');
+  const deps = fs.readFileSync(path.join(root, 'apps/api/src/cde/snapshot-deps.cjs'), 'utf8');
+  assert.doesNotMatch(server, /expandSnapshotDependencies|collectDependencySpecs/);
+  assert.match(worker, /expandSnapshotDependencies/);
+  assert.match(worker, /snapshot-deps\.cjs/);
+  assert.match(deps, /function collectDependencySpecs/);
+  assert.match(deps, /function resolveDependency/);
+  assert.equal(fs.existsSync(path.join(root, 'tests/approaches/snapshot-deps.test.cjs')), true);
+});
+
 test('quality tools live in runner and create-run, not server.cjs', () => {
   const root = path.resolve(__dirname, '..', '..');
   const server = fs.readFileSync(path.join(root, 'apps/api/src/server.cjs'), 'utf8');

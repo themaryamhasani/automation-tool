@@ -15,7 +15,8 @@ import {
 /**
  * Publish-priority load for tavan business journeys.
  *
- * Auth: PREREG_COOKIE from Runtime Login (runner). Does not perform SSO or portal login flows.
+ * Auth: Cookie from Runtime Login (PREREG_COOKIE) + Client-Id + prostage — same shape as
+ * live tavan.medu.ir get-data-source. Does not perform SSO or portal login flows.
  *
  * 1) CDE express structure (this system's runtime)
  * 2) Course context → sessions (hold) → classroom join → exam join

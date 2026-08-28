@@ -108,9 +108,95 @@ export async function liveGet(pathName, { timeoutMs = 45000 } = {}) {
 
 let session = null;
 
+function liveCookieHeader() {
+  return env('PREREG_COOKIE') || env('TAVAN_COOKIE');
+}
+
+function liveClientId() {
+  return env('AUTOMATION_RUNTIME_CLIENT_ID') || env('RUNTIME_CLIENT_ID');
+}
+
+function liveProstage() {
+  const explicit = env('AUTOMATION_RUNTIME_PROSTAGE') || env('RUNTIME_PROSTAGE');
+  if (explicit) return explicit;
+  try {
+    if (/\.medu\.ir$/i.test(new URL(liveOrigin()).hostname)) return 'develop';
+  } catch { /* ignore */ }
+  return '';
+}
+
+function liveAuthMode() {
+  const explicit = env('AUTOMATION_RUNTIME_AUTH_MODE');
+  if (explicit) return explicit;
+  try {
+    if (/\.medu\.ir$/i.test(new URL(liveOrigin()).hostname)) return 'soha-gov-sso-handoff';
+  } catch { /* ignore */ }
+  return 'devlogin';
+}
+
+async function hydrateSessionFromEnvCookie() {
+  const cookie = liveCookieHeader();
+  if (!cookie) return null;
+  const { createRuntimeState, normalizedProfile } = clientModules();
+  const { importStorageStateIntoState } = require(path.join(repoRoot(), 'shared/runtime/cookie-export.cjs'));
+  const { resolveAppTarget } = appTargets();
+  const origin = liveOrigin();
+  const authMode = liveAuthMode();
+  const target = resolveAppTarget(PROJECT_KEY, { origin, authMode });
+  const host = new URL(origin).hostname;
+  const state = createRuntimeState('env-cookie');
+  if (liveClientId()) state.clientId = liveClientId();
+  state.phase = 'CONNECTED';
+  state.origin = origin;
+  state.appOrigin = origin;
+  state.authOrigin = env('AUTOMATION_RUNTIME_AUTH_ORIGIN') || target.authOrigin || origin;
+  state.authMode = authMode;
+  state.prostage = liveProstage() || target.prostage || null;
+  state.connectedAt = new Date().toISOString();
+  await importStorageStateIntoState(state, {
+    cookies: [{
+      name: 'Cookie',
+      value: cookie,
+      domain: host,
+      path: '/',
+      secure: true,
+      httpOnly: true,
+    }],
+  });
+  const profile = normalizedProfile({
+    id: 'env-cookie',
+    origin,
+    authOrigin: state.authOrigin,
+    appOrigin: origin,
+    runtimeServiceId: host,
+    projectServiceId: projectServiceId() || host,
+    loginPath: target.loginPath,
+    coreBasePath: coreBase(),
+    appRefererPath: liveAppPath() || target.appPath || '/',
+    userSource: env('RUNTIME_DEFAULT_USER_SOURCE') || 'medugovir',
+    authMode,
+    prostage: state.prostage || undefined,
+    originAllowlist: target.originAllowlist || ['*.medu.ir', '*.m.edus.ir'],
+    readyCheck: target.readyCheck,
+  });
+  return { state, profile, source: 'env-cookie' };
+}
+
 export async function ensureLiveLogin() {
   if (session?.state?.phase === 'CONNECTED') {
     return { ok: true, source: 'memory', user: session.state.runtimeUser || null };
+  }
+  // Prefer injected runtime-session cookie (UI import / runner) over phone/password.
+  if (liveCookieHeader()) {
+    try {
+      const hydrated = await hydrateSessionFromEnvCookie();
+      if (hydrated?.state) {
+        session = { state: hydrated.state, profile: hydrated.profile };
+        return { ok: true, source: 'env-cookie', user: session.state.runtimeUser || null };
+      }
+    } catch (error) {
+      return { ok: false, reason: `env-cookie-hydrate-failed: ${error.message || error}` };
+    }
   }
   const { loginWithCredentials } = liveQuery();
   const login = await loginWithCredentials(PROJECT_KEY, {
@@ -119,12 +205,26 @@ export async function ensureLiveLogin() {
     origin: liveOrigin(),
     projectServiceId: projectServiceId(),
   });
-  if (!login.ok) {
-    if (env('PREREG_COOKIE') || env('TAVAN_COOKIE')) return { ok: true, source: 'env-cookie' };
-    return login;
-  }
+  if (!login.ok) return login;
   session = { state: login.state, profile: login.profile };
   return { ok: true, source: login.source, user: login.state.runtimeUser || null };
+}
+
+function liveRequestHeaders(extra = {}) {
+  const headers = {
+    accept: 'application/json',
+    'content-type': 'application/json; charset=UTF-8',
+    origin: liveOrigin(),
+    referer: liveAppUrl(),
+    ...extra,
+  };
+  const cookie = liveCookieHeader();
+  if (cookie) headers.cookie = cookie;
+  const clientId = liveClientId() || session?.state?.clientId;
+  if (clientId) headers['client-id'] = clientId;
+  const prostage = liveProstage() || session?.state?.prostage || session?.profile?.prostage;
+  if (prostage) headers.prostage = String(prostage);
+  return headers;
 }
 
 export async function postDataProvider(endpoint, params = {}, { withAuth = true, data, command } = {}) {
@@ -140,7 +240,9 @@ export async function postDataProvider(endpoint, params = {}, { withAuth = true,
         const serviceId = projectServiceId() || session.profile.runtimeServiceId;
         const bare = key.replace(/^ds\//, '').replace(/^fr\//, '');
         const payload = { serviceId, formId: bare, data: data !== undefined ? data : params };
-        const result = await postCore(session.state, session.profile, 'store-form-data', payload);
+        const result = await postCore(session.state, session.profile, 'store-form-data', payload, {
+          prostage: session.profile.prostage || liveProstage() || undefined,
+        });
         session.state = result.state;
         const body = result.response;
         const logical = body?.Result || {};
@@ -160,8 +262,13 @@ export async function postDataProvider(endpoint, params = {}, { withAuth = true,
         ? key
         : `ds/${key}`;
       try {
+        // who-am-i on live medu uses host serviceId (same as browser / API-CONSOLE login surface).
+        const whoAmI = /who-am-i/i.test(sourceId);
         const result = await queryDataSource(session.state, session.profile, sourceId, params, {
-          projectServiceId: projectServiceId(),
+          projectServiceId: whoAmI
+            ? (session.profile.runtimeServiceId || new URL(liveOrigin()).host)
+            : projectServiceId(),
+          prostage: session.profile.prostage || liveProstage() || undefined,
         });
         session.state = result.state;
         session.profile = result.profile;
@@ -189,14 +296,11 @@ export async function postDataProvider(endpoint, params = {}, { withAuth = true,
   }
 
   const url = `${liveOrigin()}${coreBase()}/data-provider/${isCommand ? 'store-form-data' : 'get-data-source'}`;
-  const headers = {
-    accept: 'application/json',
-    'content-type': 'application/json; charset=UTF-8',
-    origin: liveOrigin(),
-    referer: liveAppUrl(),
-  };
+  const headers = liveRequestHeaders();
   const bare = key.replace(/^ds\//, '').replace(/^fr\//, '');
-  const serviceId = projectServiceId() || new URL(liveOrigin()).host;
+  const serviceId = (/who-am-i/i.test(bare)
+    ? new URL(liveOrigin()).host
+    : (projectServiceId() || new URL(liveOrigin()).host));
   const payload = isCommand
     ? { serviceId, formId: bare, data: data !== undefined ? data : params }
     : { serviceId, key: bare, params };

@@ -42,7 +42,14 @@ test('tavan pack has layered k6 + SEC coverage paths', () => {
   const client = fs.readFileSync(path.join(TAVAN, 'scripts/k6/_client.js'), 'utf8');
   assert.match(client, /AUTOMATION_RUNTIME_URL/);
   assert.match(client, /PREREG_COOKIE/);
+  assert.match(client, /Cookie/);
+  assert.match(client, /Client-Id|AUTOMATION_RUNTIME_CLIENT_ID/);
+  assert.match(client, /prostage|AUTOMATION_RUNTIME_PROSTAGE/);
+  assert.match(client, /tavan\.medu\.ir/);
   assert.doesNotMatch(client, /['"`][^'"`]*devlogin[^'"`]*['"`]/);
+  const sec = fs.readFileSync(path.join(TAVAN, 'scripts/k6/security-perf.js'), 'utf8');
+  assert.match(sec, /coreBase\(\)|core-api\/v1/);
+  assert.doesNotMatch(sec, /Referer: `\$\{live\}\/tavan`/);
 });
 
 test('defaultK6Path prefers scripts/k6/load.js', () => {

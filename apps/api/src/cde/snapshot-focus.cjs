@@ -15,9 +15,22 @@ function apiFocus() {
   return compileFocus('CDE_SNAPSHOT_API_FOCUS', DEFAULT_API_FOCUS);
 }
 
-function shouldKeepRuntimePackage(type, packId, { savedIds, webKept = 0, apiKept = 0 } = {}) {
+function requiredMatch(requiredIds, packId, type) {
+  if (!requiredIds || !requiredIds.size) return false;
+  const id = String(packId || '');
+  if (requiredIds.has(id)) return true;
+  if (type === 'WEB_UI') {
+    if (!id.startsWith('pages/') && requiredIds.has(`pages/component/${id}`)) return true;
+    const stripped = id.match(/^pages\/component\/(.+)$/);
+    if (stripped && requiredIds.has(stripped[1])) return true;
+  }
+  return false;
+}
+
+function shouldKeepRuntimePackage(type, packId, { savedIds, requiredIds, webKept = 0, apiKept = 0 } = {}) {
   const id = String(packId || '');
   if (!id) return { keep: false, reason: 'EMPTY_PACK_ID' };
+  if (requiredMatch(requiredIds, id, type)) return { keep: true, focused: true, required: true };
   if (savedIds && savedIds.has(id)) return { keep: true, focused: true };
   const WEB_FOCUS = webFocus();
   const API_FOCUS = apiFocus();
@@ -47,6 +60,7 @@ function savedIdsFor(type, selections) {
 
 module.exports = {
   shouldKeepRuntimePackage,
+  requiredMatch,
   savedIdsFor,
   webFocus,
   apiFocus,
