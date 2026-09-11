@@ -23,7 +23,7 @@ jobs:
       CHROME_EXTENSION_ID: ${{ vars.CHROME_EXTENSION_ID }}
       EXTENSION_REQUIRE_PRODUCTION_ORIGINS: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
