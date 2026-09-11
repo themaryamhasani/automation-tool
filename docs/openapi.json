@@ -2,12 +2,13 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Automation Tool API",
-    "version": "4.0.0",
+    "version": "4.1.0",
     "description": "Platform API for scheduling, running, and reporting automated quality checks across IS, CDE, Git, and ZIP sources."
   },
   "servers": [{ "url": "/", "description": "Same origin" }],
   "tags": [
     { "name": "Auth" },
+    { "name": "Chrome Recorder" },
     { "name": "Runs" },
     { "name": "Automation" },
     { "name": "Analytics" },
@@ -60,6 +61,114 @@
         "tags": ["Auth"],
         "summary": "Begin OIDC SSO redirect",
         "responses": { "302": { "description": "Redirect to IdP" } }
+      }
+    },
+    "/api/extension/pairings": {
+      "post": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Create a short-lived, single-use extension pairing code",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "201": { "description": "Pairing code issued for the signed-in user's current projects" },
+          "401": { "description": "Interactive web session required" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/api/extension/pairings/exchange": {
+      "post": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Exchange a pairing code once for an extension access and refresh token",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "required": ["pairingCode", "deviceId"],
+            "properties": {
+              "pairingCode": { "type": "string", "writeOnly": true },
+              "deviceId": { "type": "string", "minLength": 16, "maxLength": 200 },
+              "deviceName": { "type": "string", "maxLength": 120 }
+            }
+          } } }
+        },
+        "responses": {
+          "201": { "description": "Paired extension session created" },
+          "400": { "description": "Invalid, expired, or consumed code" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/api/extension/auth/refresh": {
+      "post": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Rotate extension access and refresh credentials",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "required": ["refreshToken", "deviceId"],
+            "properties": {
+              "refreshToken": { "type": "string", "writeOnly": true },
+              "deviceId": { "type": "string", "minLength": 16, "maxLength": 200 }
+            }
+          } } }
+        },
+        "responses": {
+          "200": { "description": "Credentials rotated" },
+          "401": { "description": "Refresh credential expired, revoked, rotated, or invalid" },
+          "429": { "description": "Rate limit exceeded" }
+        }
+      }
+    },
+    "/api/extension/sessions": {
+      "get": {
+        "tags": ["Chrome Recorder"],
+        "summary": "List extension devices for the signed-in user",
+        "security": [{ "sessionCookie": [] }],
+        "responses": { "200": { "description": "Extension sessions (without token material)" } }
+      }
+    },
+    "/api/extension/sessions/{id}": {
+      "delete": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Revoke one extension device",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": {
+          "200": { "description": "Device revoked" },
+          "404": { "description": "Device not found" }
+        }
+      }
+    },
+    "/api/extension/auth/session": {
+      "delete": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Revoke the calling extension session",
+        "security": [{ "extensionAccessToken": [] }],
+        "responses": { "204": { "description": "Extension session revoked" } }
+      }
+    },
+    "/api/files/validate": {
+      "post": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Parse and validate Playwright source without executing it",
+        "security": [{ "sessionCookie": [] }, { "bearerAuth": [] }, { "apiToken": [] }, { "extensionAccessToken": [] }],
+        "responses": {
+          "200": { "description": "Validation result, including content-free issue details when unsafe" }
+        }
+      }
+    },
+    "/api/files/upsert": {
+      "put": {
+        "tags": ["Chrome Recorder"],
+        "summary": "Atomically create or update a test file by project, folder, and file name",
+        "security": [{ "sessionCookie": [] }, { "bearerAuth": [] }, { "apiToken": [] }, { "extensionAccessToken": [] }],
+        "responses": {
+          "200": { "description": "Existing file updated" },
+          "201": { "description": "New file created" },
+          "409": { "description": "Expected revision is stale" },
+          "422": { "description": "Source validation failed" }
+        }
       }
     },
     "/api/runs": {
@@ -160,7 +269,8 @@
     "securitySchemes": {
       "sessionCookie": { "type": "apiKey", "in": "cookie", "name": "automation_session" },
       "bearerAuth": { "type": "http", "scheme": "bearer" },
-      "apiToken": { "type": "apiKey", "in": "header", "name": "X-Api-Token" }
+      "apiToken": { "type": "apiKey", "in": "header", "name": "X-Api-Token" },
+      "extensionAccessToken": { "type": "http", "scheme": "bearer", "description": "Short-lived eat_ extension access token" }
     }
   }
 }

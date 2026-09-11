@@ -3,6 +3,8 @@ const { ApiError, asyncRoute, camelRow, cleanText, pagination, paged } = require
 const { audit, ensureProjectAccess } = require('../middleware/auth.cjs');
 const { FILE_NAME_PATTERN, FOLDER_PATTERN } = require('../lib/validators.cjs');
 const { requireScope } = require('../auth/api-token.cjs');
+const { assertSafePlaywrightSource } = require('./source-validation.cjs');
+const { registerRecorderFileRoutes } = require('./recorder-routes.cjs');
 
 function bindProjectAccess(pool) {
   return (user, projectId, write = false) => ensureProjectAccess(pool, user, projectId, write);
@@ -10,6 +12,7 @@ function bindProjectAccess(pool) {
 
 function registerFileRoutes(app, { pool }) {
   const access = bindProjectAccess(pool);
+  registerRecorderFileRoutes(app, { pool, audit, ensureProjectAccess: access });
 
   app.get('/api/files', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
@@ -51,6 +54,7 @@ function registerFileRoutes(app, { pool }) {
     if (!FOLDER_PATTERN.test(folderPath)) throw new ApiError(422, 'INVALID_FOLDER', 'مسیر پوشه معتبر نیست.');
     if (!FILE_NAME_PATTERN.test(fileName)) throw new ApiError(422, 'INVALID_FILE_NAME', 'نام فایل Playwright معتبر نیست.');
     if (!sourceCode.trim() || Buffer.byteLength(sourceCode) > 2 * 1024 * 1024) throw new ApiError(422, 'INVALID_SOURCE', 'محتوای فایل الزامی و حداکثر دو مگابایت است.');
+    assertSafePlaywrightSource(sourceCode);
     const result = await pool.query(
       `INSERT INTO test_files (project_id,folder_path,file_name,description,source_code,created_by,cde_project_key,cde_binding)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`,
@@ -92,6 +96,7 @@ function registerFileRoutes(app, { pool }) {
     if (!FOLDER_PATTERN.test(folderPath) || !FILE_NAME_PATTERN.test(fileName) || !sourceCode.trim()) {
       throw new ApiError(422, 'INVALID_FILE', 'اطلاعات فایل معتبر نیست.');
     }
+    assertSafePlaywrightSource(sourceCode);
     const result = await pool.query(
       `UPDATE test_files SET folder_path=$1,file_name=$2,description=$3,source_code=$4,revision=revision+1,updated_by=$5,
                              cde_project_key=$6,cde_binding=$7::jsonb,updated_at=now()

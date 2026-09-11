@@ -91,9 +91,9 @@ Runner کد تست را اجرا می‌کند و باید در محیط product
 
 ## افزونه Chrome Recorder
 
-ساخت افزونه با `npm.cmd run build:extension` انجام می‌شود و خروجی قابل Load unpacked در `apps/extension/dist` است. پس از ورود به وب، از صفحه «افزونه Chrome» یک توکن محدود پروژه بسازید، آن را در Side Panel وارد کنید، تب HTTP(S) را Attach و ضبط را شروع کنید. کد خروجی به‌صورت Playwright Test TypeScript در مدل موجود `test_files` ذخیره می‌شود و Save & Run همان صف و Runner اصلی را صدا می‌زند.
+کاربر production افزونه را از Private یا Unlisted Chrome Web Store نصب می‌کند، در صفحه «Chrome Recorder» با یک کلیک و بدون مشاهده token یا URL آن را pair می‌کند، پروژه و نام تست را انتخاب می‌کند و **Start Recording** را می‌زند. اتصال تب به‌صورت داخلی انجام می‌شود. Save از upsert اتمیک فایل و اعتبارسنجی AST سمت سرور استفاده می‌کند و Save & Run همان صف و Runner اصلی را صدا می‌زند.
 
-رمزها، token/headerهای احراز هویت، cookie و storage state ذخیره یا به API ارسال نمی‌شوند؛ مقادیر ورودی حساس با ENV placeholder جایگزین می‌شوند. راهنمای کامل مجوزها، اتصال، تست دستی، tracing، صفحات محدود Chrome و troubleshooting در [docs/chrome-recorder-extension.md](docs/chrome-recorder-extension.md) است.
+رمزها، token/headerهای احراز هویت، cookie و storage state ذخیره یا به API ارسال نمی‌شوند؛ مقادیر ورودی حساس با ENV placeholder جایگزین و پیش از ذخیره دوباره در API تحلیل می‌شوند. راهنمای معماری و لینک راهنماهای جداگانه کاربر، ادمین و توسعه‌دهنده در [docs/chrome-recorder-extension.md](docs/chrome-recorder-extension.md) است.
 
 ## بررسی سلامت
 

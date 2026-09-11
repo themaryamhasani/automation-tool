@@ -1,0 +1,79 @@
+name: Publish Chrome Recorder
+
+on:
+  workflow_dispatch:
+    inputs:
+      submit_for_review:
+        description: Submit the uploaded package for Chrome Web Store review
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: chrome-web-store
+    env:
+      AUTOMATION_TOOL_WEB_ORIGIN: ${{ vars.AUTOMATION_TOOL_WEB_ORIGIN }}
+      AUTOMATION_TOOL_API_ORIGIN: ${{ vars.AUTOMATION_TOOL_API_ORIGIN }}
+      CHROME_WEBSTORE_PUBLISHER_ID: ${{ vars.CHROME_WEBSTORE_PUBLISHER_ID }}
+      CHROME_EXTENSION_ID: ${{ vars.CHROME_EXTENSION_ID }}
+      EXTENSION_REQUIRE_PRODUCTION_ORIGINS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Validate publishing configuration
+        run: |
+          test -n "$AUTOMATION_TOOL_WEB_ORIGIN"
+          test -n "$AUTOMATION_TOOL_API_ORIGIN"
+          test -n "$CHROME_WEBSTORE_PUBLISHER_ID"
+          test -n "$CHROME_EXTENSION_ID"
+          test -n "${{ secrets.CHROME_WEBSTORE_CLIENT_ID }}"
+          test -n "${{ secrets.CHROME_WEBSTORE_CLIENT_SECRET }}"
+          test -n "${{ secrets.CHROME_WEBSTORE_REFRESH_TOKEN }}"
+      - run: npm run verify:extension
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chrome-recorder-extension-${{ github.sha }}
+          path: artifacts/extension/extension.zip
+          if-no-files-found: error
+      - name: Obtain short-lived Google access token
+        id: oauth
+        env:
+          CLIENT_ID: ${{ secrets.CHROME_WEBSTORE_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_WEBSTORE_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_WEBSTORE_REFRESH_TOKEN }}
+        run: |
+          response=$(curl --fail-with-body --silent --show-error https://oauth2.googleapis.com/token \
+            --data-urlencode client_id="$CLIENT_ID" \
+            --data-urlencode client_secret="$CLIENT_SECRET" \
+            --data-urlencode refresh_token="$REFRESH_TOKEN" \
+            --data-urlencode grant_type=refresh_token)
+          token=$(node -e "const value=JSON.parse(process.argv[1]); if(!value.access_token) process.exit(1); process.stdout.write(value.access_token)" "$response")
+          echo "::add-mask::$token"
+          echo "access_token=$token" >> "$GITHUB_OUTPUT"
+      - name: Upload package with Chrome Web Store API v2
+        env:
+          ACCESS_TOKEN: ${{ steps.oauth.outputs.access_token }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -X POST -T artifacts/extension/extension.zip \
+            "https://chromewebstore.googleapis.com/upload/v2/publishers/$CHROME_WEBSTORE_PUBLISHER_ID/items/$CHROME_EXTENSION_ID:upload"
+      - name: Submit for review
+        if: ${{ inputs.submit_for_review }}
+        env:
+          ACCESS_TOKEN: ${{ steps.oauth.outputs.access_token }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Length: 0" \
+            -X POST \
+            "https://chromewebstore.googleapis.com/v2/publishers/$CHROME_WEBSTORE_PUBLISHER_ID/items/$CHROME_EXTENSION_ID:publish"

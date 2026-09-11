@@ -1,6 +1,8 @@
 import { ExtensionError, type ExtensionErrorCode } from '../shared/errors';
+import { authorizedFetch } from '../auth/credentials';
+import { BUILD_CONFIG } from '../config';
 import type {
-  AuthProfile, EnvironmentSummary, FolderSummary, Paginated, ProjectSummary, RunSummary, TestFileSummary,
+  AuthProfile, EnvironmentSummary, FolderSummary, ProjectSummary, RunSummary, SourceValidationResult, TestFileSummary,
 } from './types';
 
 interface ApiErrorPayload {
@@ -23,12 +25,18 @@ const CODE_MAP: Record<string, ExtensionErrorCode> = {
   INVALID_FILE_NAME: 'INVALID_SOURCE',
   INVALID_FILE: 'INVALID_SOURCE',
   INVALID_SOURCE: 'INVALID_SOURCE',
+  SECRET_VALIDATION_FAILED: 'SECRET_VALIDATION_FAILED',
+  EXTENSION_AUTH_EXPIRED: 'AUTH_EXPIRED',
 };
 
 export class AutomationApiClient {
   private readonly baseUrl: string;
 
-  constructor(baseUrl: string, private readonly apiToken: string, private readonly timeoutMs = 15_000) {
+  constructor(
+    baseUrl = BUILD_CONFIG.apiOrigin,
+    private readonly authFetch: typeof authorizedFetch = authorizedFetch,
+    private readonly timeoutMs = 15_000,
+  ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
@@ -37,12 +45,12 @@ export class AutomationApiClient {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
-    headers.set('Authorization', `Bearer ${this.apiToken}`);
     if (init.body) headers.set('Content-Type', 'application/json');
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+      response = await this.authFetch(`${this.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     } catch (error) {
+      if (error instanceof ExtensionError) throw error;
       if (error instanceof DOMException && error.name === 'AbortError') throw new ExtensionError('NETWORK_TIMEOUT');
       throw new ExtensionError('API_UNAVAILABLE');
     } finally {
@@ -51,7 +59,7 @@ export class AutomationApiClient {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({})) as ApiErrorPayload;
       const code = CODE_MAP[payload.code || ''] || (response.status === 401 ? 'AUTH_EXPIRED' : response.status === 403 ? 'ACCESS_DENIED' : 'API_UNAVAILABLE');
-      throw new ExtensionError(code, payload.message || `Automation Tool API returned HTTP ${response.status}.`);
+      throw new ExtensionError(code, payload.message || `Automation Tool API returned HTTP ${response.status}.`, true, payload.details);
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
@@ -79,19 +87,19 @@ export class AutomationApiClient {
     fileName: string;
     sourceCode: string;
     description?: string;
+    revision?: number;
   }): Promise<TestFileSummary> {
-    const query = new URLSearchParams({
-      projectId: input.projectId,
-      search: input.fileName,
-      page: '1',
-      limit: '100',
+    return this.request('/api/files/upsert', {
+      method: 'PUT',
+      body: JSON.stringify({ ...input, origin: 'chrome-extension' }),
     });
-    const matches = await this.request<Paginated<TestFileSummary>>(`/api/files?${query}`);
-    const existing = matches.data.find(file => file.folderPath === input.folderPath && file.fileName === input.fileName);
-    const body = JSON.stringify({ ...input, origin: 'chrome-extension', ...(existing ? { revision: existing.revision } : {}) });
-    return existing
-      ? this.request(`/api/files/${encodeURIComponent(existing.id)}`, { method: 'PUT', body })
-      : this.request('/api/files', { method: 'POST', body });
+  }
+
+  validateSource(projectId: string, sourceCode: string): Promise<SourceValidationResult> {
+    return this.request('/api/files/validate', {
+      method: 'POST',
+      body: JSON.stringify({ projectId, sourceCode }),
+    });
   }
 
   createRun(input: {

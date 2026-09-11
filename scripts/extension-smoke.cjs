@@ -37,9 +37,11 @@ async function main() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'automation-tool-extension-smoke-'));
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    const next = _req.url === '/next';
     res.end(`<!doctype html><title>Recorder smoke target</title>
+      ${next ? `<label>Email <input data-testid="email"></label>
       <button data-testid="record-me" onclick="document.querySelector('[data-testid=count]').textContent++">Record me</button>
-      <output data-testid="count">0</output>`);
+      <output data-testid="count">0</output>` : '<a data-testid="next" href="/next">Continue</a>'}`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -64,30 +66,30 @@ async function main() {
     await target.goto(`http://127.0.0.1:${address.port}`);
     await target.bringToFront();
 
-    const attached = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'ATTACH' }));
-    if (!attached?.ok || attached.state?.attachedTabId == null) throw new Error(`Attach failed: ${attached?.error?.message || 'unknown error'}`);
-
     const recording = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'START_RECORDING' }));
-    if (!recording?.ok || recording.state?.mode !== 'recording') throw new Error(`Record failed: ${recording?.error?.message || 'unknown error'}`);
+    if (!recording?.ok || recording.state?.mode !== 'recording' || recording.state?.attachedTabId == null) throw new Error(`Automatic connect/record failed: ${recording?.error?.message || 'unknown error'}`);
+    await target.getByTestId('next').click();
+    await target.getByTestId('email').fill('qa@example.test');
     await target.getByTestId('record-me').click();
     await panel.waitForFunction(() => {
-      const source = document.querySelector('textarea')?.value || '';
-      return source.includes("@playwright/test") && source.includes('record-me');
+      const source = document.querySelector('.recorder-source-probe')?.value || '';
+      return source.includes("@playwright/test") && source.includes('record-me') && source.includes('email');
     }, undefined, { timeout: 10_000 });
     const stopped = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }));
     if (!stopped?.ok) throw new Error(`Stop recording failed: ${stopped?.error?.message || 'unknown error'}`);
-    const source = await panel.locator('textarea').inputValue();
+    const source = await panel.locator('.recorder-source-probe').inputValue();
 
     await target.bringToFront();
     const inspecting = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'START_INSPECTING' }));
     if (!inspecting?.ok || inspecting.state?.mode !== 'inspecting') throw new Error(`Inspect failed: ${inspecting?.error?.message || 'unknown error'}`);
     await target.getByTestId('record-me').click();
-    await panel.locator('.locator-panel code').waitFor({ state: 'visible', timeout: 10_000 });
-    const locator = await panel.locator('.locator-panel code').textContent();
+    await panel.locator('.assertion-builder code').waitFor({ state: 'visible', timeout: 10_000 });
+    const locator = await panel.locator('.assertion-builder code').textContent();
     if (!locator?.includes('page.')) throw new Error(`Inspector returned an invalid locator: ${locator || 'empty'}`);
     const stoppedInspecting = await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'STOP_INSPECTING' }));
     if (!stoppedInspecting?.ok) throw new Error(`Stop inspecting failed: ${stoppedInspecting?.error?.message || 'unknown error'}`);
 
+    await target.goto(`http://127.0.0.1:${address.port}`);
     await target.bringToFront();
     const replayed = await panel.evaluate(testSource => chrome.runtime.sendMessage({ type: 'REPLAY', source: testSource, trace: true }), source);
     if (!replayed?.ok || replayed.state?.mode !== 'attached') {
@@ -117,9 +119,10 @@ async function main() {
     if (restricted?.ok || restricted?.error?.code !== 'UNSUPPORTED_PAGE') throw new Error('Restricted extension page was not rejected.');
     console.log(JSON.stringify({
       ok: true,
+      browserVersion: context.browser()?.version() || 'unknown',
       extensionId,
       serviceWorker: worker.url(),
-      attach: true,
+      automaticAttach: true,
       record: true,
       inspect: true,
       replay: true,

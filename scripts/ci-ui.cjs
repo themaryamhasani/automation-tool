@@ -38,7 +38,9 @@ function shutdown() {
 
 async function main() {
   spawnNode(['apps/api/src/main.cjs'], { env: { API_PORT: '4280' } });
-  const viteCli = require.resolve('vite/bin/vite.js');
+  const vitePackagePath = require.resolve('vite/package.json');
+  const vitePackage = require(vitePackagePath);
+  const viteCli = path.resolve(path.dirname(vitePackagePath), vitePackage.bin.vite);
   spawnNode([viteCli, 'preview', '--host', '127.0.0.1', '--port', '5180', '--strictPort'], {
     cwd: path.join(root, 'apps/web'),
   });

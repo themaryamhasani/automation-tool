@@ -39,6 +39,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ['apps/extension/vite.config.ts'],
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    languageOptions: {
+      globals: nodeGlobals,
+    },
+  },
+  {
     files: ['apps/api/**/*.cjs', 'apps/runner/**/*.cjs', 'shared/**/*.cjs', 'tests/**/*.cjs', 'scripts/**/*.cjs'],
     ...js.configs.recommended,
     languageOptions: {

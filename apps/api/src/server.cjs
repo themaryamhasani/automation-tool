@@ -22,7 +22,10 @@ const { startRetentionWorker } = require('./retention/worker.cjs');
 const { loadCdeProjectContext } = require('./cde/project-context.cjs');
 const { ApiError, asyncRoute, camelRow, cleanText, parsePositiveInt, pagination, paged } = require('./http.cjs');
 const { createAuthenticate } = require('./middleware/auth.cjs');
-const { API_TOKEN_PREFIX, authorizeApiTokenRequest, requireScope, requireSession } = require('./auth/api-token.cjs');
+const { API_TOKEN_PREFIX, EXTENSION_ACCESS_TOKEN_PREFIX, authorizeApiTokenRequest, requireScope, requireSession } = require('./auth/api-token.cjs');
+const { registerPublicExtensionRoutes, registerAuthenticatedExtensionRoutes } = require('./extension/routes.cjs');
+const { registerRecorderFileRoutes } = require('./files/recorder-routes.cjs');
+const { assertSafePlaywrightSource } = require('./files/source-validation.cjs');
 
 const pool = createPool(process.env.DATABASE_URL);
 const authenticateApiAware = createAuthenticate(pool);
@@ -104,7 +107,7 @@ async function audit(client, userId, action, entityType, entityId, metadata = {}
 async function authenticate(req, _res, next) {
   const token = tokenFromRequest(req);
   if (!token) return next(new ApiError(401, 'AUTH_REQUIRED', 'برای ادامه وارد سامانه شوید.'));
-  if (token.startsWith(API_TOKEN_PREFIX)) return authenticateApiAware(req, _res, next);
+  if (token.startsWith(API_TOKEN_PREFIX) || token.startsWith(EXTENSION_ACCESS_TOKEN_PREFIX)) return authenticateApiAware(req, _res, next);
   const result = await pool.query(
     `SELECT s.id AS session_id, u.id, u.full_name, u.email, u.phone_number, u.role, u.is_active
        FROM sessions s
@@ -128,7 +131,7 @@ function requireRole(...roles) {
 
 async function ensureProjectAccess(user, projectId, write = false) {
   if (!projectId) throw new ApiError(422, 'PROJECT_REQUIRED', 'انتخاب پروژه الزامی است.');
-  if (user.apiTokenProjectIds?.length && !user.apiTokenProjectIds.includes(projectId)) {
+  if (Array.isArray(user.apiTokenProjectIds) && !user.apiTokenProjectIds.includes(projectId)) {
     throw new ApiError(403, 'PROJECT_ACCESS_DENIED', 'این توکن API به این پروژه دسترسی ندارد.');
   }
   if (write && user.role === 'VIEWER') throw new ApiError(403, 'ACCESS_DENIED', 'دسترسی شما فقط خواندنی است.');
@@ -154,6 +157,8 @@ function createServer() {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', service: 'automation-api', time: new Date().toISOString() });
   }));
+
+  registerPublicExtensionRoutes(app, { pool, audit });
 
   const loginLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
   app.post('/api/auth/login', loginLimiter, asyncRoute(async (req, res) => {
@@ -186,6 +191,7 @@ function createServer() {
 
   app.use('/api', asyncRoute(authenticate));
   app.use('/api', authorizeApiTokenRequest);
+  registerAuthenticatedExtensionRoutes(app, { pool, audit, requireRole });
   registerCdeRoutes(app, { pool, audit, ensureProjectAccess });
   registerApproachRoutes(app, { pool, audit, ensureProjectAccess });
   registerRuntimeRoutes(app, { pool, audit, ensureProjectAccess });
@@ -207,7 +213,7 @@ function createServer() {
     const projectIds = projects.rows.map(row => row.id);
     res.json({
       user: req.user,
-      projectIds: req.user.apiTokenProjectIds?.length
+      projectIds: Array.isArray(req.user.apiTokenProjectIds)
         ? projectIds.filter(id => req.user.apiTokenProjectIds.includes(id))
         : projectIds,
     });
@@ -251,7 +257,7 @@ function createServer() {
         GROUP BY p.id ORDER BY p.is_active DESC, p.name`,
       params,
     );
-    const rows = req.user.apiTokenProjectIds?.length
+    const rows = Array.isArray(req.user.apiTokenProjectIds)
       ? result.rows.filter(row => req.user.apiTokenProjectIds.includes(row.id))
       : result.rows;
     res.json(rows.map(camelRow));
@@ -450,6 +456,8 @@ function createServer() {
     } finally { client.release(); }
   }));
 
+  registerRecorderFileRoutes(app, { pool, audit, ensureProjectAccess });
+
   app.get('/api/files', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
     await ensureProjectAccess(req.user, projectId);
@@ -487,6 +495,7 @@ function createServer() {
     if (!FOLDER_PATTERN.test(folderPath)) throw new ApiError(422, 'INVALID_FOLDER', 'مسیر پوشه معتبر نیست.');
     if (!FILE_NAME_PATTERN.test(fileName)) throw new ApiError(422, 'INVALID_FILE_NAME', 'نام فایل Playwright معتبر نیست.');
     if (!sourceCode.trim() || Buffer.byteLength(sourceCode) > 2 * 1024 * 1024) throw new ApiError(422, 'INVALID_SOURCE', 'محتوای فایل الزامی و حداکثر دو مگابایت است.');
+    assertSafePlaywrightSource(sourceCode);
     const result = await pool.query(
       `INSERT INTO test_files (project_id,folder_path,file_name,description,source_code,created_by,cde_project_key,cde_binding)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`,
@@ -526,6 +535,7 @@ function createServer() {
     const sourceCode = typeof req.body?.sourceCode === 'string' ? req.body.sourceCode : '';
     const expectedRevision = Number(req.body?.revision);
     if (!FOLDER_PATTERN.test(folderPath) || !FILE_NAME_PATTERN.test(fileName) || !sourceCode.trim()) throw new ApiError(422, 'INVALID_FILE', 'اطلاعات فایل معتبر نیست.');
+    assertSafePlaywrightSource(sourceCode);
     const result = await pool.query(
       `UPDATE test_files SET folder_path=$1,file_name=$2,description=$3,source_code=$4,revision=revision+1,updated_by=$5,
                              cde_project_key=$6,cde_binding=$7::jsonb,updated_at=now()

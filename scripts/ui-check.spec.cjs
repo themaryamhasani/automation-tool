@@ -20,10 +20,12 @@ test('workspace tool list includes quality scanners', async ({ page }) => {
 });
 
 test('login reaches workspace without browser errors', async ({ page }) => {
+  await login(page);
   const errors = [];
   page.on('console', message => message.type() === 'error' && errors.push(message.text()));
   page.on('pageerror', error => errors.push(error.message));
-  await login(page);
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^IS/ })).toBeVisible({ timeout: 20_000 });
   expect(errors.filter(text => !/favicon|Download the React DevTools/i.test(text))).toEqual([]);
 });
 
@@ -44,6 +46,14 @@ test('admin routes render current headings after login', async ({ page }) => {
   await page.screenshot({ path: path.resolve(__dirname, '..', 'runtime', 'ui-desktop.png'), fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(8);
+});
+
+test('Chrome Recorder page presents the safe install state when Store configuration is absent', async ({ page }) => {
+  await login(page);
+  await page.goto('/extension');
+  await expect(page.getByRole('heading', { name: 'Chrome Recorder', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'لینک نصب تنظیم نشده است', exact: true })).toBeDisabled();
+  await expect(page.getByText('اقدام‌های شما در یک وب‌سایت را ضبط می‌کند')).toBeVisible();
 });
 
 test('mobile navigation opens the workspace link', async ({ page }) => {

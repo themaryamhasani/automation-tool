@@ -80,9 +80,11 @@ export function Layout() {
     <div className={cn('min-w-0 flex-1 transition-[margin] duration-200', open ? 'lg:mr-64' : 'lg:mr-0')}>
       <div className="flex h-12 items-center justify-between border-b border-gray-200 bg-gray-50 px-3 lg:h-10">
         <div className="flex items-center gap-1">
-          <button aria-label={open ? 'بستن منو' : 'باز کردن منو'} onClick={() => { if (window.matchMedia('(min-width: 1024px)').matches) setOpen(current => !current); else setMobile(true); }} className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900" title={open ? 'بستن سایدبار' : 'نمایش سایدبار'}>
-            {open ? <PanelRightClose className="hidden h-5 w-5 lg:block" /> : <PanelRightOpen className="hidden h-5 w-5 lg:block" />}
-            <Menu className="h-5 w-5 lg:hidden" />
+          <button aria-label={open ? 'بستن منو' : 'باز کردن منو'} onClick={() => setOpen(current => !current)} className="hidden rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 lg:inline-flex" title={open ? 'بستن سایدبار' : 'نمایش سایدبار'}>
+            {open ? <PanelRightClose className="h-5 w-5" /> : <PanelRightOpen className="h-5 w-5" />}
+          </button>
+          <button aria-label="باز کردن منو" onClick={() => setMobile(true)} className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-900 lg:hidden" title="نمایش منو">
+            <Menu className="h-5 w-5" />
           </button>
           <span className="text-sm font-semibold text-gray-800 lg:hidden">ابزار اتوماسیون تست</span>
         </div>

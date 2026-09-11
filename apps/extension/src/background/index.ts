@@ -1,8 +1,10 @@
 import type { BackgroundRequest, BackgroundResponse } from '../messaging/contracts';
 import { serializeError } from '../shared/errors';
-import { PlaywrightService } from './playwright-service';
+import { PlaywrightCrxAdapter } from './playwright-service';
+import { BUILD_CONFIG } from '../config';
+import { clearCredential, credentialStatus, pairExtension } from '../auth/credentials';
 
-const service = new PlaywrightService();
+const service = new PlaywrightCrxAdapter();
 
 async function openPanel(windowId?: number): Promise<void> {
   const id = windowId ?? (await chrome.windows.getCurrent()).id;
@@ -13,29 +15,29 @@ async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
   try {
     let state;
     switch (request.type) {
-      case 'GET_STATE': state = service.snapshot(); break;
-      case 'ATTACH': state = await service.attach(request.tabId); break;
-      case 'DETACH': state = await service.detach(); break;
-      case 'START_RECORDING': state = await service.setRecorderMode('recording'); break;
-      case 'PAUSE_RECORDING': state = await service.setRecorderMode('standby'); break;
-      case 'RESUME_RECORDING': state = await service.setRecorderMode('recording'); break;
-      case 'STOP_RECORDING': state = await service.setRecorderMode('none'); break;
-      case 'START_INSPECTING': state = await service.setRecorderMode('inspecting'); break;
-      case 'STOP_INSPECTING': state = await service.setRecorderMode('none'); break;
-      case 'REPLAY': state = await service.replay(request.source, request.trace); break;
-      case 'STOP_REPLAY': state = await service.stopReplay(); break;
-      case 'RESET_SESSION': state = await service.detach(); break;
+      case 'GET_STATE': state = service.getStatus(); break;
+      case 'ATTACH': state = await service.connect(request.tabId); break;
+      case 'DETACH': state = await service.disconnect(); break;
+      case 'START_RECORDING': state = await service.startRecording(); break;
+      case 'PAUSE_RECORDING': state = await service.pauseRecording(); break;
+      case 'RESUME_RECORDING': state = await service.resumeRecording(); break;
+      case 'STOP_RECORDING': state = await service.stopRecording(); break;
+      case 'START_INSPECTING': state = await service.startElementSelection(); break;
+      case 'STOP_INSPECTING': state = await service.cancelElementSelection(); break;
+      case 'REPLAY': state = await service.runLocally(request.source, request.trace); break;
+      case 'STOP_REPLAY': state = await service.stopLocalRun(); break;
+      case 'RESET_SESSION': state = await service.disconnect(); break;
       case 'UPDATE_RECORDER_SETTINGS':
-        state = service.snapshot();
+        state = service.getStatus();
         if (state.attachedTabId != null) {
-          await service.detach();
-          state = service.snapshot();
+          await service.disconnect();
+          state = service.getStatus();
         }
         break;
     }
     return { ok: true, state };
   } catch (error) {
-    return { ok: false, state: service.snapshot(), error: serializeError(error) };
+    return { ok: false, state: service.getStatus(), error: serializeError(error) };
   }
 }
 
@@ -48,11 +50,39 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
   return true;
 });
 
-chrome.action.onClicked.addListener((tab) => {
+chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResponse) => {
+  let senderOrigin = sender.origin || '';
+  if (!senderOrigin && sender.url) { try { senderOrigin = new URL(sender.url).origin; } catch { senderOrigin = ''; } }
+  if (senderOrigin !== BUILD_CONFIG.webOrigin || !message || typeof message !== 'object') return false;
+  const request = message as { type?: string; pairingCode?: string; protocolVersion?: number };
   void (async () => {
-    await openPanel(tab.windowId);
-    await service.attach(tab.id).catch(() => undefined);
-  })();
+    if (request.protocolVersion !== BUILD_CONFIG.pairingProtocol) {
+      return { ok: false, code: 'EXTENSION_OUTDATED', version: chrome.runtime.getManifest().version };
+    }
+    if (request.type === 'AUTOMATION_TOOL_STATUS') {
+      return { ok: true, ...(await credentialStatus()), version: chrome.runtime.getManifest().version, protocolVersion: BUILD_CONFIG.pairingProtocol };
+    }
+    if (request.type === 'AUTOMATION_TOOL_PAIR' && request.pairingCode) {
+      const credential = await pairExtension(request.pairingCode);
+      await chrome.runtime.sendMessage({ type: 'AUTH_CHANGED' }).catch(() => undefined);
+      return { ok: true, connected: true, sessionId: credential.sessionId, version: chrome.runtime.getManifest().version, protocolVersion: BUILD_CONFIG.pairingProtocol };
+    }
+    if (request.type === 'AUTOMATION_TOOL_OPEN') {
+      await openPanel(sender.tab?.windowId);
+      return { ok: true };
+    }
+    if (request.type === 'AUTOMATION_TOOL_DISCONNECT') {
+      await clearCredential();
+      await chrome.runtime.sendMessage({ type: 'AUTH_CHANGED' }).catch(() => undefined);
+      return { ok: true, connected: false };
+    }
+    return { ok: false, code: 'UNSUPPORTED_MESSAGE' };
+  })().then(sendResponse).catch((error) => sendResponse({ ok: false, ...serializeError(error) }));
+  return true;
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  void openPanel(tab.windowId);
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -66,7 +96,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id || !['automation-tool-record', 'automation-tool-inspect'].includes(String(info.menuItemId))) return;
   void (async () => {
     await openPanel(tab.windowId);
-    await service.attach(tab.id, info.menuItemId === 'automation-tool-record' ? 'recording' : 'inspecting');
+    if (info.menuItemId === 'automation-tool-record') await service.startRecording();
+    else { await service.connect(tab.id); await service.startElementSelection(); }
   })().catch(() => undefined);
 });
 
@@ -74,7 +105,8 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (!tab.id || !['record', 'inspect'].includes(command)) return;
   void (async () => {
     await openPanel(tab.windowId);
-    await service.attach(tab.id, command === 'record' ? 'recording' : 'inspecting');
+    if (command === 'record') await service.startRecording();
+    else { await service.connect(tab.id); await service.startElementSelection(); }
   })().catch(() => undefined);
 });
 

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { createAuthenticate } = require('../../apps/api/src/middleware/auth.cjs');
+const { createAuthenticate, ensureProjectAccess } = require('../../apps/api/src/middleware/auth.cjs');
 const { authorizeApiTokenRequest, requireSession } = require('../../apps/api/src/auth/api-token.cjs');
 
 const root = path.resolve(__dirname, '..', '..');
@@ -14,7 +14,7 @@ test('Chrome recorder is an isolated MV3 workspace backed by playwright-crx', ()
   const background = read('apps/extension/src/background/playwright-service.ts');
   assert.equal(pkg.name, '@automation-tool/extension');
   assert.equal(pkg.dependencies['playwright-crx'], '0.15.0');
-  assert.equal(pkg.devDependencies.vite, '6.1.6');
+  assert.equal(pkg.devDependencies.vite, '6.4.3');
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.type, 'module');
   assert.equal(manifest.side_panel.default_path, 'sidepanel.html');
@@ -29,7 +29,7 @@ test('extension integration reuses test_files and the single run creation path',
   const client = read('apps/extension/src/api/client.ts');
   const createRun = read('apps/api/src/runs/create-run.cjs');
   const runner = read('apps/runner/src/main.cjs');
-  assert.match(client, /this\.request\('\/api\/files'/);
+  assert.match(client, /this\.request\('\/api\/files\/upsert'/);
   assert.match(client, /this\.request\('\/api\/runs'/);
   assert.match(createRun, /createPersistedFileRun/);
   assert.match(runner, /persistedPlaywrightFile/);
@@ -95,4 +95,14 @@ test('API token route policy allows declared scopes and denies unrelated admin r
   authorizeApiTokenRequest(tokenRequest('POST', '/api/projects', ['projects:read']), {}, error => { deniedError = error; });
   assert.equal(deniedError?.status, 403);
   assert.equal(deniedError?.code, 'TOKEN_SCOPE_DENIED');
+});
+
+test('an explicitly empty token project scope denies every project without querying it', async () => {
+  let queryCount = 0;
+  const pool = { query: async () => { queryCount += 1; return { rowCount: 1 }; } };
+  await assert.rejects(
+    ensureProjectAccess(pool, { id: 'user-1', role: 'ADMIN', apiTokenProjectIds: [] }, 'project-1'),
+    error => error?.status === 403 && error?.code === 'PROJECT_ACCESS_DENIED',
+  );
+  assert.equal(queryCount, 0);
 });
