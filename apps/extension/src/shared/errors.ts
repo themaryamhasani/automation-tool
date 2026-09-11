@@ -13,6 +13,9 @@ export type ExtensionErrorCode =
   | 'REVISION_CONFLICT'
   | 'RUN_FAILED'
   | 'INVALID_SOURCE'
+  | 'SECRET_VALIDATION_FAILED'
+  | 'POLICY_BLOCKED'
+  | 'EXTENSION_OUTDATED'
   | 'SENSITIVE_INPUT_REPLACED'
   | 'NETWORK_TIMEOUT'
   | 'UNKNOWN';
@@ -24,20 +27,23 @@ export interface SerializedExtensionError {
 }
 
 const FRIENDLY_MESSAGES: Record<ExtensionErrorCode, string> = {
-  UNSUPPORTED_PAGE: 'Chrome does not allow extensions to attach to this page. Open a normal HTTP or HTTPS tab.',
-  DEBUGGER_BUSY: 'This tab is already being debugged. Close DevTools or detach the other debugger, then retry.',
-  TAB_CLOSED: 'The attached tab was closed. Choose another tab and attach again.',
-  ATTACH_FAILED: 'Automation Tool could not attach Playwright to this tab.',
-  REATTACH_REQUIRED: 'The extension service worker restarted. Reattach the tab to continue safely.',
-  RECORDER_FAILED: 'The Playwright recorder could not complete this action.',
-  REPLAY_FAILED: 'Local replay failed. Review the highlighted source and attached page.',
-  AUTH_EXPIRED: 'The Automation Tool token is missing, expired, or revoked. Connect again.',
-  API_UNAVAILABLE: 'Automation Tool API is unavailable. Check the API URL and server.',
-  ACCESS_DENIED: 'This account or token does not have permission for that project or action.',
+  UNSUPPORTED_PAGE: 'This Chrome page cannot be recorded. Open a normal website and try again.',
+  DEBUGGER_BUSY: 'Another tool is controlling this page. Close DevTools or the other browser automation tool, then try again.',
+  TAB_CLOSED: 'The recorded page was closed. Open the page again and reconnect.',
+  ATTACH_FAILED: 'Recorder could not connect to this page. Try reloading the page.',
+  REATTACH_REQUIRED: 'Recorder restarted and needs to reconnect to this page.',
+  RECORDER_FAILED: 'Recorder could not complete this action. Try again.',
+  REPLAY_FAILED: 'The local test failed. Review the recording and try again.',
+  AUTH_EXPIRED: 'Your recorder session expired. Reconnect from Automation Tool.',
+  API_UNAVAILABLE: 'Automation Tool is unavailable. Check your connection and try again.',
+  ACCESS_DENIED: 'Your account does not have permission for that project or action.',
   PROJECT_REMOVED: 'The selected project is no longer available. Select another project.',
   REVISION_CONFLICT: 'The saved file changed on the server. Reload its latest revision and save again.',
   RUN_FAILED: 'The test was saved, but the remote run could not be created.',
   INVALID_SOURCE: 'The generated Playwright Test source is empty or invalid.',
+  SECRET_VALIDATION_FAILED: 'This test contains sensitive data that must be replaced before saving.',
+  POLICY_BLOCKED: 'Browser automation is disabled by your organization. Contact your administrator.',
+  EXTENSION_OUTDATED: 'This recorder version is not compatible with Automation Tool. Update it from the Chrome Web Store.',
   SENSITIVE_INPUT_REPLACED: 'Sensitive values were replaced with environment-variable placeholders.',
   NETWORK_TIMEOUT: 'The API request timed out. Retry when the server is reachable.',
   UNKNOWN: 'An unexpected extension error occurred.',
@@ -48,6 +54,7 @@ export class ExtensionError extends Error {
     public readonly code: ExtensionErrorCode,
     message = FRIENDLY_MESSAGES[code],
     public readonly recoverable = true,
+    public readonly details?: unknown,
   ) {
     super(message);
   }
@@ -61,6 +68,9 @@ export function toExtensionError(error: unknown, fallback: ExtensionErrorCode = 
   }
   if (/Another debugger|already attached|debugger is already attached|target is already attached/i.test(message)) {
     return new ExtensionError('DEBUGGER_BUSY');
+  }
+  if (/policy|not permitted|permission denied|blocked by.*administrator/i.test(message)) {
+    return new ExtensionError('POLICY_BLOCKED');
   }
   if (/No tab with id|tab.*closed|target closed|has been closed/i.test(message)) {
     return new ExtensionError('TAB_CLOSED');
@@ -77,5 +87,6 @@ export function redactLogText(value: string): string {
   return value
     .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,'"}]+/gi, '$1[REDACTED]')
     .replace(/\b(atk_[A-Za-z0-9_-]{12,})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b(?:eat_|ert_|pair_)[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_TOKEN]')
     .replace(/\b(sk-[A-Za-z0-9_-]{12,})\b/g, '[REDACTED_KEY]');
 }

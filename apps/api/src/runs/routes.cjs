@@ -56,7 +56,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
       values.push(req.user.id);
       clauses.push(`EXISTS (SELECT 1 FROM user_projects up WHERE up.project_id=r.project_id AND up.user_id=$${values.length})`);
     }
-    if (req.user.apiTokenProjectIds?.length) {
+    if (Array.isArray(req.user.apiTokenProjectIds)) {
       values.push(req.user.apiTokenProjectIds);
       clauses.push(`r.project_id=ANY($${values.length}::uuid[])`);
     }

@@ -48,3 +48,16 @@ export interface AuthProfile {
   user: { id: string; fullName: string; role: 'ADMIN' | 'OPERATOR' | 'VIEWER' };
   projectIds: string[];
 }
+
+export interface SourceValidationIssue {
+  line: number;
+  category: string;
+  severity: 'error' | 'warning';
+  message: string;
+  suggestedRemediation: string;
+}
+
+export interface SourceValidationResult {
+  valid: boolean;
+  issues: SourceValidationIssue[];
+}

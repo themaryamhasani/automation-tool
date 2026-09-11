@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from '../shared/constants';
-import { clearCredential, loadCredential, loadSettings, saveCredential, saveSettings } from './settings';
+import { loadSettings, saveSettings } from './settings';
 
 const values: Record<string, unknown> = {};
 
@@ -27,13 +27,5 @@ describe('extension storage serialization', () => {
     const next = { ...DEFAULT_SETTINGS, fileName: 'checkout.spec.ts' };
     await saveSettings(next);
     expect(values[STORAGE_KEYS.settings]).toEqual(next);
-  });
-
-  it('round-trips and clears the scoped credential', async () => {
-    await expect(loadCredential()).resolves.toBeNull();
-    await saveCredential('atk_once_visible');
-    await expect(loadCredential()).resolves.toEqual({ apiToken: 'atk_once_visible' });
-    await clearCredential();
-    await expect(loadCredential()).resolves.toBeNull();
   });
 });

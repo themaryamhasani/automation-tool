@@ -28,7 +28,7 @@ function registerProjectRoutes(app, { pool }) {
         GROUP BY p.id ORDER BY p.is_active DESC, p.name`,
       params,
     );
-    const rows = req.user.apiTokenProjectIds?.length
+    const rows = Array.isArray(req.user.apiTokenProjectIds)
       ? result.rows.filter(row => req.user.apiTokenProjectIds.includes(row.id))
       : result.rows;
     res.json(rows.map(camelRow));

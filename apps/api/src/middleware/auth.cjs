@@ -1,7 +1,9 @@
 const crypto = require('node:crypto');
 const argon2 = require('argon2');
 const { tokenFromRequest } = require('../../../../shared/session-cookie.cjs');
-const { API_TOKEN_PREFIX, apiTokenFromRequest } = require('../auth/api-token.cjs');
+const {
+  API_TOKEN_PREFIX, EXTENSION_ACCESS_TOKEN_PREFIX, EXTENSION_SCOPES, apiTokenFromRequest,
+} = require('../auth/api-token.cjs');
 const { ApiError, camelRow } = require('../http.cjs');
 
 const SESSION_TTL_HOURS = Math.max(1, Number(process.env.SESSION_TTL_HOURS || 24));
@@ -51,10 +53,32 @@ async function authenticateApiToken(pool, req, token) {
   req.apiToken = {
     id: result.rows[0].token_id,
     scopes: result.rows[0].scopes || [],
-    projectIds: result.rows[0].project_ids || null,
+    projectIds: Array.isArray(result.rows[0].project_ids) ? result.rows[0].project_ids : null,
   };
   req.user = camelRow(result.rows[0]);
-  req.user.apiTokenProjectIds = result.rows[0].project_ids || null;
+  req.user.apiTokenProjectIds = Array.isArray(result.rows[0].project_ids) ? result.rows[0].project_ids : null;
+  delete req.user.tokenId;
+  return true;
+}
+
+async function authenticateExtensionAccess(pool, req, token) {
+  if (!token.startsWith(EXTENSION_ACCESS_TOKEN_PREFIX)) return false;
+  const result = await pool.query(
+    `SELECT s.id AS token_id,s.project_ids,u.id,u.full_name,u.email,u.phone_number,u.role,u.is_active
+       FROM extension_sessions s JOIN users u ON u.id=s.user_id
+      WHERE s.access_token_hash=$1 AND s.revoked_at IS NULL
+        AND s.access_expires_at>now() AND s.refresh_expires_at>now()`,
+    [tokenHash(token)],
+  );
+  if (!result.rowCount || !result.rows[0].is_active) {
+    throw new ApiError(401, 'EXTENSION_AUTH_EXPIRED', 'The recorder connection has expired. Connect it again.');
+  }
+  await pool.query('UPDATE extension_sessions SET last_used_at=now(),updated_at=now() WHERE id=$1', [result.rows[0].token_id]);
+  const projectIds = Array.isArray(result.rows[0].project_ids) ? result.rows[0].project_ids : [];
+  req.authKind = 'extension';
+  req.apiToken = { id: result.rows[0].token_id, scopes: EXTENSION_SCOPES, projectIds };
+  req.user = camelRow(result.rows[0]);
+  req.user.apiTokenProjectIds = projectIds;
   delete req.user.tokenId;
   return true;
 }
@@ -62,7 +86,7 @@ async function authenticateApiToken(pool, req, token) {
 function createAuthenticate(pool) {
   return async function authenticate(req, _res, next) {
     const sessionToken = tokenFromRequest(req);
-    if (sessionToken && !sessionToken.startsWith(API_TOKEN_PREFIX)) {
+    if (sessionToken && !sessionToken.startsWith(API_TOKEN_PREFIX) && !sessionToken.startsWith(EXTENSION_ACCESS_TOKEN_PREFIX)) {
       const result = await pool.query(
         `SELECT s.id AS session_id, u.id, u.full_name, u.email, u.phone_number, u.role, u.is_active
            FROM sessions s
@@ -81,7 +105,8 @@ function createAuthenticate(pool) {
     const apiToken = apiTokenFromRequest(req);
     if (apiToken) {
       try {
-        const ok = await authenticateApiToken(pool, req, apiToken);
+        const ok = await authenticateApiToken(pool, req, apiToken)
+          || await authenticateExtensionAccess(pool, req, apiToken);
         if (ok) return next();
       } catch (error) {
         return next(error);
@@ -100,7 +125,7 @@ function requireRole(...roles) {
 
 async function ensureProjectAccess(pool, user, projectId, write = false) {
   if (!projectId) throw new ApiError(422, 'PROJECT_REQUIRED', 'انتخاب پروژه الزامی است.');
-  if (user.apiTokenProjectIds?.length && !user.apiTokenProjectIds.includes(projectId)) {
+  if (Array.isArray(user.apiTokenProjectIds) && !user.apiTokenProjectIds.includes(projectId)) {
     throw new ApiError(403, 'PROJECT_ACCESS_DENIED', 'این توکن API به این پروژه دسترسی ندارد.');
   }
   if (write && user.role === 'VIEWER') throw new ApiError(403, 'ACCESS_DENIED', 'دسترسی شما فقط خواندنی است.');
@@ -121,6 +146,7 @@ module.exports = {
   verifyPassword,
   clientAddress,
   audit,
+  authenticateExtensionAccess,
   createAuthenticate,
   requireRole,
   ensureProjectAccess,

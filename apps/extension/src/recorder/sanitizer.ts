@@ -63,14 +63,36 @@ function parenthesisDelta(line: string): number {
   return [...line].reduce((depth, character) => depth + (character === '(' ? 1 : character === ')' ? -1 : 0), 0);
 }
 
+function protectIndirectSensitiveValues(source: string, envVars: Set<string>): { source: string; changed: boolean } {
+  const declaration = /\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*((?:'(?:\\.|[^'\\])*')|(?:"(?:\\.|[^"\\])*")|(?:`(?:\\.|[^`\\])*`))/g;
+  const replacements: Array<{ start: number; end: number; text: string }> = [];
+  for (const match of source.matchAll(declaration)) {
+    const name = match[2];
+    const literal = match[3];
+    const value = unquoteLiteral(literal);
+    const usedBySensitiveInput = new RegExp(`(?:password|passwd|passcode|secret|token|api[-_ ]?key|authorization|card|cvc|cvv|pin)[^\\n]{0,180}\\.(?:fill|type)\\(\\s*${name}\\s*\\)`, 'i').test(source);
+    const sensitive = SENSITIVE_HINTS.test(name) || SECRET_LITERAL.test(value.trim()) || usedBySensitiveInput;
+    if (!sensitive || !new RegExp(`\\.(?:fill|type)\\(\\s*${name}\\s*\\)`).test(source)) continue;
+    const env = environmentName(`${name} ${usedBySensitiveInput ? 'password' : value}`);
+    envVars.add(env);
+    const literalOffset = match[0].lastIndexOf(literal);
+    replacements.push({ start: (match.index || 0) + literalOffset, end: (match.index || 0) + literalOffset + literal.length, text: `process.env.${env} ?? ''` });
+  }
+  let next = source;
+  for (const replacement of replacements.reverse()) next = `${next.slice(0, replacement.start)}${replacement.text}${next.slice(replacement.end)}`;
+  return { source: next, changed: replacements.length > 0 };
+}
+
 export function sanitizeSource(source: string): SanitizationResult {
   const warnings = new Set<string>();
   const environmentVariables = new Set<string>();
   const lines: string[] = [];
-  let changed = false;
+  const indirect = protectIndirectSensitiveValues(source.replace(/\r\n?/g, '\n'), environmentVariables);
+  let changed = indirect.changed;
+  if (indirect.changed) warnings.add('Sensitive input values were replaced with Runner environment variables.');
   let sensitiveCallDepth = 0;
 
-  for (const line of source.replace(/\r\n?/g, '\n').split('\n')) {
+  for (const line of indirect.source.split('\n')) {
     if (sensitiveCallDepth > 0) {
       sensitiveCallDepth += parenthesisDelta(line);
       continue;

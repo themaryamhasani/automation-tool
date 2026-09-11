@@ -19,8 +19,11 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint apps/web/src apps/extension/src apps/api/src apps/runner/src shared tests scripts",
-    "test": "npm run test -w @automation-tool/extension && node scripts/run-tests.cjs",
+    "test": "npm run test -w @automation-tool/extension && npm run test -w @automation-tool/web && node scripts/run-tests.cjs",
     "build:extension": "npm run build -w @automation-tool/extension",
+    "lint:extension": "eslint apps/extension/src apps/extension/vite.config.ts scripts/package-extension.cjs scripts/extension-smoke.cjs",
+    "package:extension": "npm run build:extension && node scripts/package-extension.cjs",
+    "verify:extension": "npm run lint:extension && npm run typecheck -w @automation-tool/extension && npm run test -w @automation-tool/extension && npm run package:extension",
     "test:ui": "node scripts/ci-ui.cjs",
     "test:extension-smoke": "node scripts/extension-smoke.cjs",
     "db:setup": "node scripts/db-setup.cjs",
@@ -30,7 +33,7 @@
     "seed:pack": "node scripts/seed-cde-pack.cjs",
     "seed:tavan": "node scripts/seed-tavan-pack.cjs",
     "seed:medu-camp": "node scripts/seed-medu-camp-pack.cjs",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm test"
+    "verify": "npm run lint && npm run typecheck && npm run build && npm test && node scripts/package-extension.cjs"
   },
   "dependencies": {
     "argon2": "^0.44.0",
@@ -43,6 +46,13 @@
     "concurrently": "^9.2.1",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "jszip": "^3.10.1",
     "typescript-eslint": "^8.40.0"
+  },
+  "overrides": {
+    "dompurify": "3.4.15",
+    "fast-uri": "3.1.6",
+    "js-yaml": "4.3.2",
+    "qs": "6.16.0"
   }
 }

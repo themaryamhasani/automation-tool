@@ -4,6 +4,7 @@ import { RECORDER_LANGUAGE, isAttachableUrl } from '../shared/constants';
 import { ExtensionError, redactLogText, serializeError, toExtensionError } from '../shared/errors';
 import { loadSettings } from '../storage/settings';
 import { createInitialSessionState, recoverSessionState } from './session-state';
+import type { BrowserAutomationAdapter } from './automation-adapter';
 
 const TRACE_PATH = '/tmp/automation-tool-trace.zip';
 const TRACE_DOWNLOAD_DOCUMENT = 'trace-download.html';
@@ -40,7 +41,7 @@ function base64Chunk(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export class PlaywrightService {
+export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
   private appPromise: Promise<CrxApplication> | null = null;
   private app: CrxApplication | null = null;
   private page: Page | null = null;
@@ -65,6 +66,36 @@ export class PlaywrightService {
   snapshot(): SessionState {
     return { ...this.state, lastError: this.state.lastError ? { ...this.state.lastError } : null };
   }
+
+  getStatus(): SessionState { return this.snapshot(); }
+
+  connect(tabId?: number): Promise<SessionState> { return this.attach(tabId); }
+
+  disconnect(): Promise<SessionState> { return this.detach(); }
+
+  async startRecording(): Promise<SessionState> {
+    const active = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    if (!active?.id || !isAttachableUrl(active.url)) throw new ExtensionError('UNSUPPORTED_PAGE');
+    if (!this.page || this.state.attachedTabId !== active.id) return this.attach(active.id, 'recording');
+    return this.setRecorderMode('recording');
+  }
+
+  pauseRecording(): Promise<SessionState> { return this.setRecorderMode('standby'); }
+
+  resumeRecording(): Promise<SessionState> { return this.setRecorderMode('recording'); }
+
+  stopRecording(): Promise<SessionState> { return this.setRecorderMode('none'); }
+
+  async startElementSelection(): Promise<SessionState> {
+    if (!this.page) await this.attach();
+    return this.setRecorderMode('inspecting');
+  }
+
+  cancelElementSelection(): Promise<SessionState> { return this.setRecorderMode('none'); }
+
+  runLocally(source: string, trace = false): Promise<SessionState> { return this.replay(source, trace); }
+
+  stopLocalRun(): Promise<SessionState> { return this.stopReplay(); }
 
   private async update(patch: Partial<SessionState>): Promise<SessionState> {
     this.state = { ...this.state, ...patch, updatedAt: new Date().toISOString() };
@@ -104,7 +135,7 @@ export class PlaywrightService {
               mode: 'reattach-required',
               active: false,
               canReplay: false,
-              lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'Playwright released the tab debugger. Reattach the tab to continue.')),
+              lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'Chrome disconnected from this page. Reconnect to continue.')),
             });
           }
         });
@@ -278,7 +309,7 @@ export class PlaywrightService {
       mode: 'reattach-required',
       active: false,
       canReplay: false,
-      lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'Replay stopped. Reattach the tab before continuing.')),
+      lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'The local test was stopped. Reconnect before trying again.')),
     });
   }
 
@@ -340,7 +371,7 @@ export class PlaywrightService {
       mode: 'reattach-required',
       active: false,
       canReplay: false,
-      lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', `Chrome detached the tab debugger${detail}. Reattach to continue.`)),
+      lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', `Chrome disconnected from this page${detail}. Reconnect to continue.`)),
     });
   }
 }

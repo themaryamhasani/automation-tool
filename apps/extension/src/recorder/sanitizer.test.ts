@@ -42,4 +42,11 @@ describe('secret sanitizer', () => {
     const result = sanitizeSource("await page.setExtraHTTPHeaders({ Authorization: 'Bearer abcdefghijklmnop' });");
     expect(result.source).toContain("Authorization: process.env.TEST_TOKEN ?? ''");
   });
+
+  it('protects a secret passed through a local variable', () => {
+    const result = sanitizeSource("const password = 'do-not-store-me';\nawait page.getByLabel('Password').fill(password);");
+    expect(result.source).not.toContain('do-not-store-me');
+    expect(result.source).toContain("const password = process.env.TEST_PASSWORD ?? ''");
+    expect(result.environmentVariables).toContain('TEST_PASSWORD');
+  });
 });

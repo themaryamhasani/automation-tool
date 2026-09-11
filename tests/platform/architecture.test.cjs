@@ -191,8 +191,9 @@ test('imported Playwright files use the standalone PostgreSQL CDE binding', asyn
     if (!rows.rowCount) return;
     for (const row of rows.rows) {
       assert.ok(row.cde_project_key);
-      assert.equal(row.cde_binding.playwrightStore.provider, 'POSTGRESQL');
-      assert.equal(row.cde_binding.playwrightStore.repoName, 'automation_tool_test_files');
+      const store = row.cde_binding.playwrightStore || row.cde_binding.repositories?.tests;
+      assert.equal(store?.provider, 'POSTGRESQL');
+      assert.equal(store?.repoName, 'automation_tool_test_files');
     }
   } finally { await client.end(); }
 });

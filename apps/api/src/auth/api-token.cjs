@@ -1,6 +1,9 @@
 const crypto = require('node:crypto');
 
 const API_TOKEN_PREFIX = 'atk_';
+const EXTENSION_ACCESS_TOKEN_PREFIX = 'eat_';
+const EXTENSION_REFRESH_TOKEN_PREFIX = 'ert_';
+const EXTENSION_SCOPES = ['profile:read', 'projects:read', 'files:read', 'files:write', 'runs:create', 'runs:read'];
 const DEFAULT_SCOPES = ['runs:create', 'runs:read'];
 const ALLOWED_SCOPES = new Set([
   'profile:read', 'projects:read',
@@ -57,6 +60,9 @@ const API_TOKEN_ROUTES = [
   { method: 'GET', path: /^\/projects$/, scopes: ['projects:read'] },
   { method: 'GET', path: /^\/projects\/[^/]+\/environments$/, scopes: ['projects:read'] },
   { method: 'GET', path: /^\/files(?:\/folders|\/[^/]+)?$/, scopes: ['files:read'] },
+  { method: 'POST', path: /^\/files\/validate$/, scopes: ['files:write'] },
+  { method: 'PUT', path: /^\/files\/upsert$/, scopes: ['files:write'] },
+  { method: 'DELETE', path: /^\/extension\/auth\/session$/, scopes: ['profile:read'] },
   { method: 'POST', path: /^\/files$/, scopes: ['files:write'] },
   { method: 'PUT', path: /^\/files\/[^/]+$/, scopes: ['files:write'] },
   { method: 'DELETE', path: /^\/files\/[^/]+$/, scopes: ['files:write'] },
@@ -96,6 +102,9 @@ function authorizeApiTokenRequest(req, _res, next) {
 
 module.exports = {
   API_TOKEN_PREFIX,
+  EXTENSION_ACCESS_TOKEN_PREFIX,
+  EXTENSION_REFRESH_TOKEN_PREFIX,
+  EXTENSION_SCOPES,
   ALLOWED_SCOPES,
   apiTokenFromRequest,
   normalizeScopes,
