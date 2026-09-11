@@ -39,7 +39,7 @@ jobs:
           test -n "${{ secrets.CHROME_WEBSTORE_CLIENT_SECRET }}"
           test -n "${{ secrets.CHROME_WEBSTORE_REFRESH_TOKEN }}"
       - run: npm run verify:extension
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: chrome-recorder-extension-${{ github.sha }}
           path: artifacts/extension/extension.zip

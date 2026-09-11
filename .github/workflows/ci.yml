@@ -35,7 +35,7 @@ jobs:
       - run: npm ci
       - run: npm run db:setup
       - run: npm run verify
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: chrome-recorder-extension
           path: artifacts/extension/extension.zip
