@@ -43,7 +43,7 @@
   "devDependencies": {
     "@eslint/js": "^9.33.0",
     "@playwright/test": "1.55.1",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.5",
     "eslint": "^9.33.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "jszip": "^3.10.1",
