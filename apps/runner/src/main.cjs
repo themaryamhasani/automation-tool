@@ -359,7 +359,8 @@ async function executeExternalRun(run) {
 }
 
 async function executeRun(run) {
-  if (String(run.source_approach || 'CDE') !== 'CDE' || run.tool_kind) {
+  const persistedPlaywrightFile = Boolean(run.test_file_id) && String(run.tool_kind || 'PLAYWRIGHT') === 'PLAYWRIGHT';
+  if (!persistedPlaywrightFile && (String(run.source_approach || 'CDE') !== 'CDE' || run.tool_kind)) {
     await executeExternalRun(run);
     return;
   }
@@ -377,9 +378,16 @@ async function executeRun(run) {
   };
   await fs.mkdir(output, { recursive: true });
   const snapshot = await materializeSnapshot(run, workspace);
-  const manifestPath = path.join(output, 'cde-snapshot-manifest.json');
-  await fs.writeFile(manifestPath, JSON.stringify(snapshot.manifest || run.cde_manifest || snapshot, null, 2), 'utf8');
-  await registerArtifact(run.id, 'CDE_SNAPSHOT', manifestPath, 'cde-snapshot-manifest.json', 'application/json');
+  const hasCdeSnapshot = Boolean(run.cde_snapshot_id || snapshot.manifest || run.cde_manifest);
+  const manifestName = hasCdeSnapshot ? 'cde-snapshot-manifest.json' : 'test-source-manifest.json';
+  const manifestPath = path.join(output, manifestName);
+  await fs.writeFile(manifestPath, JSON.stringify(snapshot.manifest || run.cde_manifest || {
+    testFileId: run.test_file_id,
+    testFilePath: run.test_file_path,
+    sourceApproach: run.source_approach,
+    triggerSource: run.trigger_source,
+  }, null, 2), 'utf8');
+  await registerArtifact(run.id, hasCdeSnapshot ? 'CDE_SNAPSHOT' : 'TEST_SOURCE', manifestPath, manifestName, 'application/json');
   const configPath = path.join(workspace, 'playwright.config.cjs');
   await fs.writeFile(configPath, configSource(run, reportPaths), 'utf8');
   const testFile = path.join('tests', snapshot.testFile || safeName(path.basename(run.test_file_path || 'test.spec.js')));

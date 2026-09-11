@@ -1,11 +1,11 @@
 const { ApiError, asyncRoute, camelRow, cleanText } = require('../../http.cjs');
 const { requireRole } = require('../../middleware/auth.cjs');
 const {
-  createApiTokenValue, normalizeScopes, tokenHash, ALLOWED_SCOPES,
+  createApiTokenValue, normalizeScopes, tokenHash, ALLOWED_SCOPES, requireSession,
 } = require('../../auth/api-token.cjs');
 
 function registerTokenRoutes(app, { pool, audit }) {
-  app.get('/api/tokens', requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
+  app.get('/api/tokens', requireSession, requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
     const result = await pool.query(
       `SELECT id, name, token_prefix, scopes, project_ids, expires_at, last_used_at, revoked_at, created_at
          FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC`,
@@ -14,7 +14,7 @@ function registerTokenRoutes(app, { pool, audit }) {
     res.json(result.rows.map(camelRow));
   }));
 
-  app.post('/api/tokens', requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
+  app.post('/api/tokens', requireSession, requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
     const name = cleanText(req.body?.name, 120);
     if (!name) throw new ApiError(422, 'TOKEN_NAME_REQUIRED', 'نام توکن الزامی است.');
     const scopes = normalizeScopes(req.body?.scopes);
@@ -36,7 +36,7 @@ function registerTokenRoutes(app, { pool, audit }) {
     res.status(201).json({ ...camelRow(result.rows[0]), token });
   }));
 
-  app.delete('/api/tokens/:id', requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
+  app.delete('/api/tokens/:id', requireSession, requireRole('ADMIN', 'OPERATOR'), asyncRoute(async (req, res) => {
     const updated = await pool.query(
       `UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL RETURNING id`,
       [req.params.id, req.user.id],
@@ -46,7 +46,7 @@ function registerTokenRoutes(app, { pool, audit }) {
     res.json({ ok: true });
   }));
 
-  app.get('/api/tokens/scopes', requireRole('ADMIN', 'OPERATOR'), (_req, res) => {
+  app.get('/api/tokens/scopes', requireSession, requireRole('ADMIN', 'OPERATOR'), (_req, res) => {
     res.json([...ALLOWED_SCOPES]);
   });
 }

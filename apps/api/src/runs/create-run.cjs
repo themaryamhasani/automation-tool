@@ -115,31 +115,24 @@ function normalizeBrowsers(value) {
   return projects;
 }
 
-async function createClassicCdeFileRun(pool, user, project, body) {
+async function createPersistedFileRun(pool, user, project, body) {
   const projectId = project.id;
+  const approach = project.sourceApproach || project.source_approach;
   const settings = await pool.query(
     'SELECT enabled, default_timeout_seconds, default_workers, default_retries, default_trace, default_reporter FROM runner_settings WHERE id=1',
   );
   if (!settings.rows[0]?.enabled) throw new RunCreateError('RUNNER_DISABLED', 'Runner در تنظیمات غیرفعال است.', 409);
-  const cdeContext = await loadCdeProjectContext(pool, user, projectId, { requireConnection: false, required: false });
+  const cdeContext = approach === 'CDE' && user.sessionId
+    ? await loadCdeProjectContext(pool, user, projectId, { requireConnection: false, required: false })
+    : { projectKey: null, connected: false, format: 1 };
   const file = await pool.query(
     'SELECT id, folder_path, file_name, revision, source_code, cde_binding FROM test_files WHERE id=$1 AND project_id=$2',
     [body.testFileId, projectId],
   );
   if (!file.rowCount) throw new RunCreateError('FILE_REQUIRED', 'فایل تست معتبر انتخاب کنید.', 422);
-  let environmentRow;
-  if (body?.environmentId) {
-    const environment = await pool.query(
-      `SELECT id, name, base_url, api_base_url, gateway_base_url, available_from, available_until
-         FROM environments WHERE id=$1 AND project_id=$2 AND enabled=true
-           AND (available_from IS NULL OR available_from<=now()) AND (available_until IS NULL OR available_until>now())`,
-      [body.environmentId, projectId],
-    );
-    if (!environment.rowCount) throw new RunCreateError('ENVIRONMENT_REQUIRED', 'محیط فعال انتخاب کنید.', 422);
-    environmentRow = environment.rows[0];
-  } else {
-    environmentRow = await ensureEnvironment(pool, projectId, 'playwright-local', 'http://127.0.0.1');
-  }
+  const environmentRow = body?.environmentId
+    ? await resolveEnvironment(pool, { ...project, id: projectId, source_approach: approach }, body)
+    : await ensureEnvironment(pool, projectId, 'playwright-local', 'http://127.0.0.1');
   const browsers = normalizeBrowsers(body?.browserProjects);
   const trace = TRACE_MODES.has(body?.trace) ? body.trace : settings.rows[0].default_trace;
   const reporter = REPORTERS.has(body?.reporter) ? body.reporter : settings.rows[0].default_reporter;
@@ -185,8 +178,10 @@ async function createClassicCdeFileRun(pool, user, project, body) {
         test_file_path: `${file.rows[0].folder_path}/${file.rows[0].file_name}`,
         requested_by: user.id,
         status: useSnapshot ? 'PREPARING' : 'QUEUED',
-        source_approach: 'CDE',
+        source_approach: approach,
         tool_kind: 'PLAYWRIGHT',
+        pack_id: approach === 'CDE' ? cdeContext.projectKey : null,
+        trigger_source: String(body?.triggerSource || 'manual').slice(0, 40),
         cde_project_key: cdeContext.projectKey,
         cde_snapshot_id: snapshotId,
       },
@@ -202,7 +197,7 @@ async function createClassicCdeFileRun(pool, user, project, body) {
       },
       source: {
         source_snapshot: file.rows[0].source_code,
-        cde_manifest: cdeManifest,
+        cde_manifest: approach === 'CDE' ? cdeManifest : null,
       },
     });
     await client.query('COMMIT');
@@ -218,7 +213,9 @@ async function createClassicCdeFileRun(pool, user, project, body) {
 
 async function createApproachRun(pool, user, project, body) {
   const approach = project.sourceApproach || project.source_approach;
-  if (approach === 'CDE' && body?.testFileId) return createClassicCdeFileRun(pool, user, project, body);
+  if (body?.testFileId && String(body?.toolKind || 'PLAYWRIGHT').toUpperCase() === 'PLAYWRIGHT') {
+    return createPersistedFileRun(pool, user, { ...project, source_approach: approach }, body);
+  }
   const projectId = project.id;
   const settings = await pool.query('SELECT * FROM runner_settings WHERE id=1');
   if (!settings.rows[0]?.enabled) throw new RunCreateError('RUNNER_DISABLED', 'Runner در تنظیمات غیرفعال است.', 409);

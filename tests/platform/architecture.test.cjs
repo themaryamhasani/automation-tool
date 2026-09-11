@@ -154,7 +154,7 @@ test('run list and detail queries never select r.* or full source_snapshot', () 
   assert.match(routes, /\/api\/runs\/:id\/events/);
   assert.match(routes, /\/api\/runs\/:id\/logs/);
   assert.match(server, /registerRunRoutes/);
-  assert.match(createRun, /createClassicCdeFileRun/);
+  assert.match(createRun, /createPersistedFileRun/);
   assert.match(createRun, /testFileId/);
 });
 

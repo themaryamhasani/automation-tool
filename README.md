@@ -82,11 +82,18 @@ Compose چهار container مستقل `web`، `api`، `runner` و `postgres` ر�
 - `apps/web`: رابط فارسی RTL مبتنی بر React و ساختار صفحه/سایدبار سازمانی
 - `apps/api`: REST API، کلاینت رمزنگاری‌شده CDE، session مستقل، Mapping، Catalog و Snapshot worker
 - `apps/runner`: مصرف صف PostgreSQL، بازکردن امن Snapshot و اجرای Playwright
+- `apps/extension`: افزونه Manifest V3 مبتنی بر `playwright-crx` برای ضبط، Inspect، Replay، Trace، Save و Save & Run
 - `database`: schema مستقل PostgreSQL شامل کاربران، تست‌ها، CDE و Snapshotها
 - `shared`: رمزنگاری authenticated مشترک API و Runner
 - `artifacts`: گزارش‌ها، logها و traceهای هر اجرا
 
 Runner کد تست را اجرا می‌کند و باید در محیط production داخل container/host محدود، بدون secret اضافی و با دسترسی شبکه کنترل‌شده اجرا شود.
+
+## افزونه Chrome Recorder
+
+ساخت افزونه با `npm.cmd run build:extension` انجام می‌شود و خروجی قابل Load unpacked در `apps/extension/dist` است. پس از ورود به وب، از صفحه «افزونه Chrome» یک توکن محدود پروژه بسازید، آن را در Side Panel وارد کنید، تب HTTP(S) را Attach و ضبط را شروع کنید. کد خروجی به‌صورت Playwright Test TypeScript در مدل موجود `test_files` ذخیره می‌شود و Save & Run همان صف و Runner اصلی را صدا می‌زند.
+
+رمزها، token/headerهای احراز هویت، cookie و storage state ذخیره یا به API ارسال نمی‌شوند؛ مقادیر ورودی حساس با ENV placeholder جایگزین می‌شوند. راهنمای کامل مجوزها، اتصال، تست دستی، tracing، صفحات محدود Chrome و troubleshooting در [docs/chrome-recorder-extension.md](docs/chrome-recorder-extension.md) است.
 
 ## بررسی سلامت
 

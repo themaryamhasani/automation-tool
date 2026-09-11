@@ -8,6 +8,7 @@ const {
 } = require('./events.cjs');
 const { getRunLogs } = require('../../../../shared/db/run-store.cjs');
 const { buildRunDelta, detailsFromReport } = require('../../../../shared/run-delta.cjs');
+const { requireScope } = require('../auth/api-token.cjs');
 
 const PREVIOUS_RUN_JSON = `(
   SELECT jsonb_build_object(
@@ -45,7 +46,7 @@ function safeArtifactPath(relativePath) {
 }
 
 function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
-  app.get('/api/runs', asyncRoute(async (req, res) => {
+  app.get('/api/runs', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const { page, limit, offset } = pagination(req.query);
     const projectId = cleanText(req.query.projectId, 100);
     if (projectId) await ensureProjectAccess(req.user, projectId);
@@ -54,6 +55,10 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     if (req.user.role !== 'ADMIN') {
       values.push(req.user.id);
       clauses.push(`EXISTS (SELECT 1 FROM user_projects up WHERE up.project_id=r.project_id AND up.user_id=$${values.length})`);
+    }
+    if (req.user.apiTokenProjectIds?.length) {
+      values.push(req.user.apiTokenProjectIds);
+      clauses.push(`r.project_id=ANY($${values.length}::uuid[])`);
     }
     if (projectId) { values.push(projectId); clauses.push(`r.project_id=$${values.length}`); }
     const status = cleanText(req.query.status, 30);
@@ -78,7 +83,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     res.json(paged(result.rows.map(camelRow), count.rows[0].total, page, limit));
   }));
 
-  app.get('/api/runs/:id', asyncRoute(async (req, res) => {
+  app.get('/api/runs/:id', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const result = await pool.query(
       `SELECT ${RUN_EVENT_COLUMNS}, p.name AS project_name, e.name AS environment_name, e.base_url, u.full_name AS requested_by_name,
               ${RUN_SNAPSHOT_JSON}, ${RUN_ARTIFACTS_JSON}
@@ -92,7 +97,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     res.json(camelRow(result.rows[0]));
   }));
 
-  app.get('/api/runs/:id/events', asyncRoute(async (req, res) => {
+  app.get('/api/runs/:id/events', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT project_id FROM runs WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id);
@@ -113,7 +118,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     await new Promise(resolve => req.on('close', resolve));
   }));
 
-  app.get('/api/runs/:id/logs', asyncRoute(async (req, res) => {
+  app.get('/api/runs/:id/logs', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT project_id FROM runs WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id);
@@ -136,7 +141,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     res.type('text/plain; charset=utf-8').send(logs || '');
   }));
 
-  app.get('/api/runs/:id/delta', asyncRoute(async (req, res) => {
+  app.get('/api/runs/:id/delta', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const current = await pool.query(
       `SELECT r.id, r.project_id, r.status, r.pack_id, r.tool_kind, r.test_file_path, r.completed_at,
               r.failed_tests, r.passed_tests, r.total_tests, res.report, ${PREVIOUS_RUN_JSON} AS previous_run
@@ -162,7 +167,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     });
   }));
 
-  app.post('/api/runs', asyncRoute(async (req, res) => {
+  app.post('/api/runs', requireScope('runs:create'), asyncRoute(async (req, res) => {
     const projectId = String(req.body?.projectId || '');
     await ensureProjectAccess(req.user, projectId, true);
     const projectRow = await pool.query('SELECT id, name, code, source_approach FROM projects WHERE id=$1', [projectId]);
@@ -174,7 +179,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     res.status(201).json(camelRow(created));
   }));
 
-  app.post('/api/runs/:id/cancel', asyncRoute(async (req, res) => {
+  app.post('/api/runs/:id/cancel', requireScope('runs:cancel'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT id, project_id, status, cde_snapshot_id FROM runs WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id, true);
@@ -198,7 +203,7 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     res.json(camelRow(result.rows[0]));
   }));
 
-  app.get('/api/artifacts/:id/download', asyncRoute(async (req, res) => {
+  app.get('/api/artifacts/:id/download', requireScope('runs:read'), asyncRoute(async (req, res) => {
     const result = await pool.query(
       `SELECT a.id, a.relative_path, a.file_name, r.project_id FROM artifacts a JOIN runs r ON r.id=a.run_id WHERE a.id=$1`,
       [req.params.id],

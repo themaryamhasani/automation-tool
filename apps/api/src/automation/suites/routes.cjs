@@ -21,7 +21,7 @@ function normalizeItems(items) {
 }
 
 function registerSuiteRoutes(app, { pool, audit, ensureProjectAccess }) {
-  app.get('/api/projects/:projectId/suites', asyncRoute(async (req, res) => {
+  app.get('/api/projects/:projectId/suites', requireScope('suites:read'), asyncRoute(async (req, res) => {
     await ensureProjectAccess(req.user, req.params.projectId);
     const result = await pool.query(
       `SELECT id, project_id, name, description, environment_id, schedule_cron, schedule_timezone,

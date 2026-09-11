@@ -4,6 +4,7 @@ const { audit, requireRole, ensureProjectAccess } = require('../middleware/auth.
 const {
   validHttpUrl, environmentAvailability, environmentSecretReferences,
 } = require('../lib/validators.cjs');
+const { requireScope } = require('../auth/api-token.cjs');
 
 function bindProjectAccess(pool) {
   return (user, projectId, write = false) => ensureProjectAccess(pool, user, projectId, write);
@@ -12,7 +13,7 @@ function bindProjectAccess(pool) {
 function registerProjectRoutes(app, { pool }) {
   const access = bindProjectAccess(pool);
 
-  app.get('/api/projects', asyncRoute(async (req, res) => {
+  app.get('/api/projects', requireScope('projects:read'), asyncRoute(async (req, res) => {
     const params = [];
     const join = req.user.role === 'ADMIN' ? '' : 'JOIN user_projects up ON up.project_id = p.id AND up.user_id = $1';
     if (req.user.role !== 'ADMIN') params.push(req.user.id);
@@ -27,7 +28,10 @@ function registerProjectRoutes(app, { pool }) {
         GROUP BY p.id ORDER BY p.is_active DESC, p.name`,
       params,
     );
-    res.json(result.rows.map(camelRow));
+    const rows = req.user.apiTokenProjectIds?.length
+      ? result.rows.filter(row => req.user.apiTokenProjectIds.includes(row.id))
+      : result.rows;
+    res.json(rows.map(camelRow));
   }));
 
   app.post('/api/projects', requireRole('ADMIN'), asyncRoute(async (req, res) => {
@@ -96,7 +100,7 @@ function registerProjectRoutes(app, { pool }) {
     res.json({ id: req.params.id, deleted: true, archived: false });
   }));
 
-  app.get('/api/projects/:projectId/environments', asyncRoute(async (req, res) => {
+  app.get('/api/projects/:projectId/environments', requireScope('projects:read'), asyncRoute(async (req, res) => {
     await access(req.user, req.params.projectId);
     const result = await pool.query(
       `SELECT *, (enabled AND (available_from IS NULL OR available_from<=now()) AND (available_until IS NULL OR available_until>now())) AS available_now

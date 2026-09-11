@@ -2,6 +2,7 @@ const { loadCdeProjectContext } = require('../cde/project-context.cjs');
 const { ApiError, asyncRoute, camelRow, cleanText, pagination, paged } = require('../http.cjs');
 const { audit, ensureProjectAccess } = require('../middleware/auth.cjs');
 const { FILE_NAME_PATTERN, FOLDER_PATTERN } = require('../lib/validators.cjs');
+const { requireScope } = require('../auth/api-token.cjs');
 
 function bindProjectAccess(pool) {
   return (user, projectId, write = false) => ensureProjectAccess(pool, user, projectId, write);
@@ -10,7 +11,7 @@ function bindProjectAccess(pool) {
 function registerFileRoutes(app, { pool }) {
   const access = bindProjectAccess(pool);
 
-  app.get('/api/files', asyncRoute(async (req, res) => {
+  app.get('/api/files', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
     await access(req.user, projectId);
     const { page, limit, offset } = pagination(req.query);
@@ -27,7 +28,7 @@ function registerFileRoutes(app, { pool }) {
     res.json(paged(result.rows.map(row => ({ ...camelRow(row), fullPath: `${row.folder_path}/${row.file_name}` })), count.rows[0].total, page, limit));
   }));
 
-  app.get('/api/files/folders', asyncRoute(async (req, res) => {
+  app.get('/api/files/folders', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
     await access(req.user, projectId);
     const result = await pool.query(
@@ -37,7 +38,7 @@ function registerFileRoutes(app, { pool }) {
     res.json(result.rows.map(camelRow));
   }));
 
-  app.post('/api/files', asyncRoute(async (req, res) => {
+  app.post('/api/files', requireScope('files:write'), asyncRoute(async (req, res) => {
     const projectId = String(req.body?.projectId || '');
     await access(req.user, projectId, true);
     const project = await pool.query('SELECT source_approach FROM projects WHERE id=$1', [projectId]);
@@ -55,11 +56,11 @@ function registerFileRoutes(app, { pool }) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`,
       [projectId, folderPath, fileName, cleanText(req.body?.description, 700) || null, sourceCode, req.user.id, cdeContext.projectKey, JSON.stringify(cdeContext)],
     );
-    await audit(pool, req.user.id, 'TEST_FILE_CREATED', 'TEST_FILE', result.rows[0].id, { projectId, path: `${folderPath}/${fileName}` });
+    await audit(pool, req.user.id, 'TEST_FILE_CREATED', 'TEST_FILE', result.rows[0].id, { projectId, path: `${folderPath}/${fileName}`, origin: cleanText(req.body?.origin, 40) || 'web' });
     res.status(201).json({ ...camelRow(result.rows[0]), fullPath: `${folderPath}/${fileName}` });
   }));
 
-  app.get('/api/files/:id', asyncRoute(async (req, res) => {
+  app.get('/api/files/:id', requireScope('files:read'), asyncRoute(async (req, res) => {
     const current = await pool.query(
       `SELECT f.*, p.name AS project_name FROM test_files f JOIN projects p ON p.id=f.project_id WHERE f.id=$1`,
       [req.params.id],
@@ -76,7 +77,7 @@ function registerFileRoutes(app, { pool }) {
     });
   }));
 
-  app.put('/api/files/:id', asyncRoute(async (req, res) => {
+  app.put('/api/files/:id', requireScope('files:write'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT * FROM test_files WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'FILE_NOT_FOUND', 'فایل پیدا نشد.');
     await access(req.user, current.rows[0].project_id, true);
@@ -98,11 +99,11 @@ function registerFileRoutes(app, { pool }) {
       [folderPath, fileName, cleanText(req.body?.description, 700) || null, sourceCode, req.user.id, cdeContext.projectKey, JSON.stringify(cdeContext), req.params.id, expectedRevision],
     );
     if (!result.rowCount) throw new ApiError(409, 'REVISION_CONFLICT', 'فایل توسط کاربر دیگری تغییر کرده است؛ دوباره بارگذاری کنید.');
-    await audit(pool, req.user.id, 'TEST_FILE_UPDATED', 'TEST_FILE', req.params.id, { revision: result.rows[0].revision });
+    await audit(pool, req.user.id, 'TEST_FILE_UPDATED', 'TEST_FILE', req.params.id, { revision: result.rows[0].revision, origin: cleanText(req.body?.origin, 40) || 'web' });
     res.json({ ...camelRow(result.rows[0]), fullPath: `${folderPath}/${fileName}` });
   }));
 
-  app.delete('/api/files/:id', asyncRoute(async (req, res) => {
+  app.delete('/api/files/:id', requireScope('files:write'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT project_id FROM test_files WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'FILE_NOT_FOUND', 'فایل پیدا نشد.');
     await access(req.user, current.rows[0].project_id, true);

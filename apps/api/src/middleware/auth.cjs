@@ -62,7 +62,7 @@ async function authenticateApiToken(pool, req, token) {
 function createAuthenticate(pool) {
   return async function authenticate(req, _res, next) {
     const sessionToken = tokenFromRequest(req);
-    if (sessionToken) {
+    if (sessionToken && !sessionToken.startsWith(API_TOKEN_PREFIX)) {
       const result = await pool.query(
         `SELECT s.id AS session_id, u.id, u.full_name, u.email, u.phone_number, u.role, u.is_active
            FROM sessions s

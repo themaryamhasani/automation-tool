@@ -130,3 +130,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 export function runEventsUrl(runId: string) {
   return `${API_BASE}/api/runs/${encodeURIComponent(runId)}/events`;
 }
+
+export function opsEventsUrl() {
+  return `${API_BASE}/api/ops/events`;
+}

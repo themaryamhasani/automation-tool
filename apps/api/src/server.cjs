@@ -21,8 +21,11 @@ const { startScheduler } = require('./automation/scheduler.cjs');
 const { startRetentionWorker } = require('./retention/worker.cjs');
 const { loadCdeProjectContext } = require('./cde/project-context.cjs');
 const { ApiError, asyncRoute, camelRow, cleanText, parsePositiveInt, pagination, paged } = require('./http.cjs');
+const { createAuthenticate } = require('./middleware/auth.cjs');
+const { API_TOKEN_PREFIX, authorizeApiTokenRequest, requireScope, requireSession } = require('./auth/api-token.cjs');
 
 const pool = createPool(process.env.DATABASE_URL);
+const authenticateApiAware = createAuthenticate(pool);
 const { warmTargetsFromDb } = require('../../../shared/runtime/app-targets.cjs');
 warmTargetsFromDb(pool).catch((error) => {
   console.error(JSON.stringify({ event: 'project-targets-warm-failed', message: error.message }));
@@ -101,6 +104,7 @@ async function audit(client, userId, action, entityType, entityId, metadata = {}
 async function authenticate(req, _res, next) {
   const token = tokenFromRequest(req);
   if (!token) return next(new ApiError(401, 'AUTH_REQUIRED', 'برای ادامه وارد سامانه شوید.'));
+  if (token.startsWith(API_TOKEN_PREFIX)) return authenticateApiAware(req, _res, next);
   const result = await pool.query(
     `SELECT s.id AS session_id, u.id, u.full_name, u.email, u.phone_number, u.role, u.is_active
        FROM sessions s
@@ -124,6 +128,9 @@ function requireRole(...roles) {
 
 async function ensureProjectAccess(user, projectId, write = false) {
   if (!projectId) throw new ApiError(422, 'PROJECT_REQUIRED', 'انتخاب پروژه الزامی است.');
+  if (user.apiTokenProjectIds?.length && !user.apiTokenProjectIds.includes(projectId)) {
+    throw new ApiError(403, 'PROJECT_ACCESS_DENIED', 'این توکن API به این پروژه دسترسی ندارد.');
+  }
   if (write && user.role === 'VIEWER') throw new ApiError(403, 'ACCESS_DENIED', 'دسترسی شما فقط خواندنی است.');
   const result = user.role === 'ADMIN'
     ? await pool.query('SELECT id FROM projects WHERE id = $1', [projectId])
@@ -178,6 +185,7 @@ function createServer() {
   }));
 
   app.use('/api', asyncRoute(authenticate));
+  app.use('/api', authorizeApiTokenRequest);
   registerCdeRoutes(app, { pool, audit, ensureProjectAccess });
   registerApproachRoutes(app, { pool, audit, ensureProjectAccess });
   registerRuntimeRoutes(app, { pool, audit, ensureProjectAccess });
@@ -189,17 +197,23 @@ function createServer() {
   registerOpsRoutes(app, { pool, retentionWorker });
   startScheduler(pool);
 
-  app.get('/api/auth/me', asyncRoute(async (req, res) => {
+  app.get('/api/auth/me', requireScope('profile:read'), asyncRoute(async (req, res) => {
     const projects = await pool.query(
       req.user.role === 'ADMIN'
         ? 'SELECT id FROM projects ORDER BY name'
         : 'SELECT project_id AS id FROM user_projects WHERE user_id = $1 ORDER BY created_at',
       req.user.role === 'ADMIN' ? [] : [req.user.id],
     );
-    res.json({ user: req.user, projectIds: projects.rows.map(row => row.id) });
+    const projectIds = projects.rows.map(row => row.id);
+    res.json({
+      user: req.user,
+      projectIds: req.user.apiTokenProjectIds?.length
+        ? projectIds.filter(id => req.user.apiTokenProjectIds.includes(id))
+        : projectIds,
+    });
   }));
 
-  app.post('/api/auth/logout', asyncRoute(async (req, res) => {
+  app.post('/api/auth/logout', requireSession, asyncRoute(async (req, res) => {
     await pool.query('DELETE FROM cde_sessions WHERE session_id = $1', [req.user.sessionId]);
     await pool.query('UPDATE sessions SET revoked_at = now() WHERE id = $1', [req.user.sessionId]);
     await audit(pool, req.user.id, 'AUTH_LOGOUT', 'USER', req.user.id);
@@ -207,7 +221,7 @@ function createServer() {
     res.status(204).end();
   }));
 
-  app.post('/api/auth/change-password', asyncRoute(async (req, res) => {
+  app.post('/api/auth/change-password', requireSession, asyncRoute(async (req, res) => {
     const currentPassword = String(req.body?.currentPassword || '');
     const newPassword = String(req.body?.newPassword || '');
     if (newPassword.length < 10) throw new ApiError(422, 'WEAK_PASSWORD', 'رمز جدید باید حداقل ۱۰ کاراکتر باشد.');
@@ -222,7 +236,7 @@ function createServer() {
     res.status(204).end();
   }));
 
-  app.get('/api/projects', asyncRoute(async (req, res) => {
+  app.get('/api/projects', requireScope('projects:read'), asyncRoute(async (req, res) => {
     const params = [];
     const access = req.user.role === 'ADMIN' ? '' : 'JOIN user_projects up ON up.project_id = p.id AND up.user_id = $1';
     if (req.user.role !== 'ADMIN') params.push(req.user.id);
@@ -237,7 +251,10 @@ function createServer() {
         GROUP BY p.id ORDER BY p.is_active DESC, p.name`,
       params,
     );
-    res.json(result.rows.map(camelRow));
+    const rows = req.user.apiTokenProjectIds?.length
+      ? result.rows.filter(row => req.user.apiTokenProjectIds.includes(row.id))
+      : result.rows;
+    res.json(rows.map(camelRow));
   }));
 
   app.post('/api/projects', requireRole('ADMIN'), asyncRoute(async (req, res) => {
@@ -306,7 +323,7 @@ function createServer() {
     res.json({ id: req.params.id, deleted: true, archived: false });
   }));
 
-  app.get('/api/projects/:projectId/environments', asyncRoute(async (req, res) => {
+  app.get('/api/projects/:projectId/environments', requireScope('projects:read'), asyncRoute(async (req, res) => {
     await ensureProjectAccess(req.user, req.params.projectId);
     const result = await pool.query("SELECT *, (enabled AND (available_from IS NULL OR available_from<=now()) AND (available_until IS NULL OR available_until>now())) AS available_now FROM environments WHERE project_id=$1 ORDER BY enabled DESC, name", [req.params.projectId]);
     res.json(result.rows.map(row => { const serialized = camelRow(row); if (req.user.role !== 'ADMIN') delete serialized.secretReferences; return serialized; }));
@@ -433,7 +450,7 @@ function createServer() {
     } finally { client.release(); }
   }));
 
-  app.get('/api/files', asyncRoute(async (req, res) => {
+  app.get('/api/files', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
     await ensureProjectAccess(req.user, projectId);
     const { page, limit, offset } = pagination(req.query);
@@ -450,14 +467,14 @@ function createServer() {
     res.json(paged(result.rows.map(row => ({ ...camelRow(row), fullPath: `${row.folder_path}/${row.file_name}` })), count.rows[0].total, page, limit));
   }));
 
-  app.get('/api/files/folders', asyncRoute(async (req, res) => {
+  app.get('/api/files/folders', requireScope('files:read'), asyncRoute(async (req, res) => {
     const projectId = String(req.query.projectId || '');
     await ensureProjectAccess(req.user, projectId);
     const result = await pool.query('SELECT folder_path, count(*)::int AS file_count FROM test_files WHERE project_id=$1 GROUP BY folder_path ORDER BY folder_path', [projectId]);
     res.json(result.rows.map(camelRow));
   }));
 
-  app.post('/api/files', asyncRoute(async (req, res) => {
+  app.post('/api/files', requireScope('files:write'), asyncRoute(async (req, res) => {
     const projectId = String(req.body?.projectId || '');
     await ensureProjectAccess(req.user, projectId, true);
     const project = await pool.query('SELECT source_approach FROM projects WHERE id=$1', [projectId]);
@@ -475,11 +492,11 @@ function createServer() {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING *`,
       [projectId, folderPath, fileName, cleanText(req.body?.description, 700) || null, sourceCode, req.user.id, cdeContext.projectKey, JSON.stringify(cdeContext)],
     );
-    await audit(pool, req.user.id, 'TEST_FILE_CREATED', 'TEST_FILE', result.rows[0].id, { projectId, path: `${folderPath}/${fileName}` });
+    await audit(pool, req.user.id, 'TEST_FILE_CREATED', 'TEST_FILE', result.rows[0].id, { projectId, path: `${folderPath}/${fileName}`, origin: cleanText(req.body?.origin, 40) || 'web' });
     res.status(201).json({ ...camelRow(result.rows[0]), fullPath: `${folderPath}/${fileName}` });
   }));
 
-  app.get('/api/files/:id', asyncRoute(async (req, res) => {
+  app.get('/api/files/:id', requireScope('files:read'), asyncRoute(async (req, res) => {
     const current = await pool.query(
       `SELECT f.*, p.name AS project_name FROM test_files f JOIN projects p ON p.id=f.project_id WHERE f.id=$1`,
       [req.params.id],
@@ -496,7 +513,7 @@ function createServer() {
     });
   }));
 
-  app.put('/api/files/:id', asyncRoute(async (req, res) => {
+  app.put('/api/files/:id', requireScope('files:write'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT * FROM test_files WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'FILE_NOT_FOUND', 'فایل پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id, true);
@@ -516,11 +533,11 @@ function createServer() {
       [folderPath, fileName, cleanText(req.body?.description, 700) || null, sourceCode, req.user.id, cdeContext.projectKey, JSON.stringify(cdeContext), req.params.id, expectedRevision],
     );
     if (!result.rowCount) throw new ApiError(409, 'REVISION_CONFLICT', 'فایل توسط کاربر دیگری تغییر کرده است؛ دوباره بارگذاری کنید.');
-    await audit(pool, req.user.id, 'TEST_FILE_UPDATED', 'TEST_FILE', req.params.id, { revision: result.rows[0].revision });
+    await audit(pool, req.user.id, 'TEST_FILE_UPDATED', 'TEST_FILE', req.params.id, { revision: result.rows[0].revision, origin: cleanText(req.body?.origin, 40) || 'web' });
     res.json({ ...camelRow(result.rows[0]), fullPath: `${folderPath}/${fileName}` });
   }));
 
-  app.delete('/api/files/:id', asyncRoute(async (req, res) => {
+  app.delete('/api/files/:id', requireScope('files:write'), asyncRoute(async (req, res) => {
     const current = await pool.query('SELECT project_id FROM test_files WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'FILE_NOT_FOUND', 'فایل پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id, true);

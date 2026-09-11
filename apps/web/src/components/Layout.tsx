@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   Activity, Bell, Building2, BarChart3, LogOut, Menu, PanelRightClose, PanelRightOpen, PanelsTopLeft,
-  RefreshCw, Settings, Terminal, TestTube2, UserRound, Users,
+  RefreshCw, Settings, Terminal, TestTube2, UserRound, Users, Chrome,
 } from 'lucide-react';
 import { useAuth } from '../auth';
 import { cn } from './ui';
@@ -14,6 +14,7 @@ const primary = [
   { to: '/workspace', label: 'اتوماسیون', icon: PanelsTopLeft },
   { to: '/runs', label: 'تاریخچه اجراها', icon: Terminal },
   { to: '/reports', label: 'گزارشات', icon: BarChart3 },
+  { to: '/extension', label: 'افزونه Chrome', icon: Chrome },
 ];
 const admin = [
   { to: '/projects', label: 'پروژه‌ها و محیط‌ها', icon: Building2 },

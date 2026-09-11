@@ -65,6 +65,37 @@ export interface TestFile {
   updatedAt: string;
 }
 
+export interface TestSuite {
+  id: string;
+  projectId: string;
+  name: string;
+  enabled: boolean;
+  scheduleCron?: string | null;
+  scheduleTimezone?: string | null;
+  priority: number;
+  items?: Array<Record<string, unknown>>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WebhookEndpoint {
+  id: string;
+  projectId: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+}
+
+export interface NotificationChannel {
+  id: string;
+  projectId?: string | null;
+  name: string;
+  kind: 'EMAIL' | 'SLACK' | 'TEAMS' | 'WEBHOOK';
+  events: string[];
+  enabled: boolean;
+}
+
 export interface Artifact {
   id: string;
   kind: 'LOG' | 'REPORT' | 'EVIDENCE' | string;

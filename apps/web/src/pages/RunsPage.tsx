@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   CheckCircle2, Download, Eye, FileCode2, LoaderCircle, Play, Search, Square, Terminal, XCircle,
 } from 'lucide-react';
@@ -33,6 +33,7 @@ export function RunsPage() {
   const { user } = useAuth();
   const canWrite = user?.role !== 'VIEWER';
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState(localStorage.getItem('automation-active-project') || '');
   const [data, setData] = useState<Paginated<Run> | null>(null);
@@ -79,6 +80,13 @@ export function RunsPage() {
 
   useEffect(() => { void loadProjects().catch(error => notify(error.message, 'error')); }, [loadProjects]);
   useEffect(() => { void loadRuns(); }, [page, projectId, status]);
+  useEffect(() => {
+    const runId = searchParams.get('runId');
+    if (!runId) return;
+    void api<Run>(`/api/runs/${encodeURIComponent(runId)}`)
+      .then(run => { setDetail(run); setProjectId(run.projectId); localStorage.setItem('automation-active-project', run.projectId); })
+      .catch(error => notify(error instanceof Error ? error.message : 'اجرای لینک‌شده پیدا نشد.', 'error'));
+  }, [searchParams]);
   useEffect(() => {
     const timer = window.setTimeout(() => { setPage(1); void loadRuns(); }, 350);
     return () => window.clearTimeout(timer);

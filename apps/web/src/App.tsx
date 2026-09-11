@@ -10,6 +10,8 @@ import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AuditPage } from './pages/AuditPage';
 import { ReportsPage } from './pages/ReportsPage';
+import { ExtensionPage } from './pages/ExtensionPage';
+import { TestFilePage } from './pages/TestFilePage';
 
 function AdminOnly({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -26,6 +28,8 @@ export function App() {
       <Route path="/workspace" element={<WorkspacePage />} />
       <Route path="/runs" element={<RunsPage />} />
       <Route path="/reports" element={<ReportsPage />} />
+      <Route path="/extension" element={<ExtensionPage />} />
+      <Route path="/files/:fileId" element={<TestFilePage />} />
       <Route path="/projects" element={<AdminOnly><ProjectsPage /></AdminOnly>} />
       <Route path="/users" element={<AdminOnly><UsersPage /></AdminOnly>} />
       <Route path="/settings" element={<AdminOnly><SettingsPage /></AdminOnly>} />

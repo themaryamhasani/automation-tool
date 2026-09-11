@@ -26,9 +26,9 @@ const nodeGlobals = {
 };
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'runtime', 'artifacts', 'test-results', 'playwright-report', 'apps/web/node_modules', 'apps/web/dist'] },
+  { ignores: ['dist', 'node_modules', 'runtime', 'artifacts', 'test-results', 'playwright-report', 'apps/web/node_modules', 'apps/web/dist', 'apps/extension/dist'] },
   {
-    files: ['apps/web/src/**/*.{ts,tsx}'],
+    files: ['apps/web/src/**/*.{ts,tsx}', 'apps/extension/src/**/*.{ts,tsx}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     plugins: { 'react-hooks': reactHooks },
     rules: {

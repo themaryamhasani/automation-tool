@@ -11,7 +11,7 @@ function normalizeEvents(events) {
 }
 
 function registerWebhookRoutes(app, { pool, audit, ensureProjectAccess }) {
-  app.get('/api/projects/:projectId/webhooks', asyncRoute(async (req, res) => {
+  app.get('/api/projects/:projectId/webhooks', requireScope('webhooks:read'), asyncRoute(async (req, res) => {
     await ensureProjectAccess(req.user, req.params.projectId);
     const result = await pool.query(
       `SELECT id, project_id, name, url, events, enabled, created_at, updated_at

@@ -12,7 +12,7 @@ function normalizeEvents(events) {
 }
 
 function registerNotificationRoutes(app, { pool, audit, ensureProjectAccess }) {
-  app.get('/api/projects/:projectId/notifications', asyncRoute(async (req, res) => {
+  app.get('/api/projects/:projectId/notifications', requireScope('notifications:read'), asyncRoute(async (req, res) => {
     await ensureProjectAccess(req.user, req.params.projectId);
     const result = await pool.query(
       `SELECT id, project_id, name, kind, config, events, enabled, created_at, updated_at
