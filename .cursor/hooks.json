@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "node .cursor/hooks/shell-safety.cjs",
+        "failClosed": false
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "node .cursor/hooks/secret-read-guard.cjs",
+        "matcher": "Read|TabRead",
+        "failClosed": false
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node .cursor/hooks/subagent-stop.cjs",
+        "matcher": "architecture-guardian|run-pipeline-engineer|source-approach-engineer|chrome-recorder-engineer|schema-migration-engineer|platform-verifier|auth-crypto-guardian",
+        "loop_limit": 3
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor/hooks/stop-verify-nudge.cjs",
+        "loop_limit": 1
+      }
+    ]
+  }
+}

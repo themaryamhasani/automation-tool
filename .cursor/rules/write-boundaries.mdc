@@ -1,0 +1,29 @@
+---
+description: Persistent write and secret safety boundaries for automation-tool agents
+alwaysApply: true
+---
+
+# Write & secret boundaries
+
+Follow `AGENTS.md`. In short:
+
+## Secrets
+
+- Never read or print `.env` secret values, PATs, Vault tokens, or encryption keys.
+- Prefer `.env.example` for variable **names** only.
+- Never embed credentials in recorded Playwright source.
+
+## External IS tree
+
+- Writes only under `IS_TEST_REL` (default `test`) inside `IS_ROOT`.
+- Prefer `IS_DOC_REL` (default `test/doc`) for pack/doc/script content.
+- Never edit IS `services/` or other non-test product code.
+- Path helpers: `shared/is/paths.cjs`.
+
+## Migrations
+
+- Forward-only `database/NNN_*.sql`. No reverse rewrites of applied migrations.
+
+## Live external checks
+
+- Do not run `node scripts/live-check.cjs` with real CDE/git credentials unless the user explicitly asks.

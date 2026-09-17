@@ -1,0 +1,23 @@
+---
+description: >-
+  Lead-agent orchestration: classify, risk, delegate with dependency graphs,
+  parallelize safely, verify. Applies to non-trivial work.
+alwaysApply: true
+---
+
+# Orchestration (main agent)
+
+For non-trivial work, follow skill **`agent-orchestration`**.
+
+## Quick rules
+
+1. **Trivial → no subagents** (typo, one import, one-liner).
+2. **Classify** + **risk** (LOW/MEDIUM/HIGH) before coding.
+3. **Delegate** using the real team in `AGENTS.md` / capability matrix in the skill — never invent Frontend/Backend agents.
+4. **Parallelize** only disjoint ownership; **serialize** DDL before consumers; verifier last.
+5. **Handoffs** are short JSON (task/scope/files/findings/constraints) — not the whole chat.
+6. **MEDIUM+** incomplete until `platform-verifier` or skill `platform-verify` runs real commands.
+7. **HIGH** → architecture and/or `auth-crypto-guardian` as applicable; human before destructive/secret/live actions.
+8. **Max 2** verify-fix retries, then ask the human.
+9. Require specialists’ **structured output** (Summary … Blockers).
+10. No circular A→B→A delegation; escalate to human/parent instead.

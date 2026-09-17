@@ -89,6 +89,8 @@ Compose چهار container مستقل `web`، `api`، `runner` و `postgres` ر�
 
 Runner کد تست را اجرا می‌کند و باید در محیط production داخل container/host محدود، بدون secret اضافی و با دسترسی شبکه کنترل‌شده اجرا شود.
 
+برای عامل‌های Cursor (قوانین، ساب‌ایجنت‌ها، مهارت‌ها و مرز نوشتن روی IS/`database`): فایل [AGENTS.md](AGENTS.md) را ببینید.
+
 ## افزونه Chrome Recorder
 
 تا زمان فعال‌شدن انتشار در Chrome Web Store، افزونه به‌صورت موقت با **Load unpacked** از پوشه `apps/extension/dist` نصب می‌شود. شناسه‌ای که Chrome نشان می‌دهد باید در `VITE_CHROME_EXTENSION_ID` قرار بگیرد و وب‌اپ دوباره build شود. سپس کاربر در صفحه «Chrome Recorder» با یک کلیک و بدون مشاهده token یا URL آن را pair می‌کند، پروژه و نام تست را انتخاب می‌کند و **Start Recording** را می‌زند. اتصال تب به‌صورت داخلی انجام می‌شود. Save از upsert اتمیک فایل و اعتبارسنجی AST سمت سرور استفاده می‌کند و Save & Run همان صف و Runner اصلی را صدا می‌زند.

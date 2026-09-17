@@ -1,0 +1,58 @@
+---
+description: >-
+  How the main agent should delegate to project subagents in automation-tool.
+  Apply when planning multi-step work or choosing specialists.
+alwaysApply: true
+---
+
+# Subagent delegation
+
+Shared context: `AGENTS.md`. Orchestration playbook: skill **`agent-orchestration`**. Quality: `quality-bar.mdc`. Boundaries: `write-boundaries.mdc`.
+
+## Prefer delegation when
+
+| Situation | Subagent |
+|-----------|----------|
+| New routes / god-file risk / architecture contracts | `architecture-guardian` |
+| create-run, runner tools, artifacts, SSE/events | `run-pipeline-engineer` |
+| CDE/IS/Git/ZIP, bindings, pack overlays, IS `test/` writes | `source-approach-engineer` |
+| Extension MV3, pairing, AST save, storageState | `chrome-recorder-engineer` |
+| `database/*.sql`, search_path, bindings DDL | `schema-migration-engineer` |
+| Auth, cookies, encryption keys, secrets-resolve | `auth-crypto-guardian` |
+| Choosing/running gates, CI-equivalent verify, test placement | `platform-verifier` |
+
+## Skills
+
+| Skill | Use |
+|-------|-----|
+| `agent-orchestration` | Classify, graph, parallelize, escalate |
+| `feature-development` | Cross-module features |
+| `bug-fix` | Defects / stuck runs |
+| `security-change` | HIGH security work |
+| `platform-verify` | Gate ladder |
+| `forward-migration` | Forward SQL |
+| `pack-overlay` | Pack overlays |
+
+## Parallel vs serialize
+
+- **Parallel:** disjoint file ownership (e.g. extension vs pack-overlay investigations/edits).
+- **Serialize:** DDL → code using new columns; any two writers on the same files; `platform-verifier` after implementers.
+- **Handoff:** short JSON only (see `agent-orchestration`); never whole chat / whole files.
+
+## Main agent keeps
+
+Orchestration, trivial edits, user communication, merging specialist structured output, human escalation.
+
+## Default verify policy
+
+MEDIUM+: skill `platform-verify` / `platform-verifier`.  
+Credentialed `live-check`: only if the user explicitly asks.
+
+## Anti-patterns
+
+- Spawning all subagents for a one-line fix
+- Circular handoffs (A→B→A)
+- Re-exploring architecture in every specialist
+- Inventing Frontend/Backend/DevOps agents that do not exist here
+- Claiming done without Verification evidence on MEDIUM+
+- Writing outside IS `test/` (`IS_TEST_REL`)
