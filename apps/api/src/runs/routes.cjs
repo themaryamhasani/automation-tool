@@ -183,10 +183,20 @@ function registerRunRoutes(app, { pool, audit, ensureProjectAccess }) {
     const current = await pool.query('SELECT id, project_id, status, cde_snapshot_id FROM runs WHERE id=$1', [req.params.id]);
     if (!current.rowCount) throw new ApiError(404, 'RUN_NOT_FOUND', 'اجرا پیدا نشد.');
     await ensureProjectAccess(req.user, current.rows[0].project_id, true);
+    if (current.rows[0].status === 'CANCEL_REQUESTED') {
+      const result = await pool.query(
+        `SELECT ${RUN_EVENT_COLUMNS} FROM runs r ${RUN_CHILD_JOINS} WHERE r.id=$1`,
+        [req.params.id],
+      );
+      return res.json(camelRow(result.rows[0]));
+    }
     const targetStatus = ['PREPARING', 'QUEUED'].includes(current.rows[0].status) ? 'CANCELLED' : 'CANCEL_REQUESTED';
     const updated = await pool.query(
-      `UPDATE runs SET status=$1, completed_at=CASE WHEN $1='CANCELLED' THEN now() ELSE completed_at END, updated_at=now()
-        WHERE id=$2 AND status IN ('PREPARING','QUEUED','RUNNING') RETURNING id`,
+      targetStatus === 'CANCELLED'
+        ? `UPDATE runs SET status=$1::varchar, completed_at=now(), updated_at=now()
+            WHERE id=$2::uuid AND status IN ('PREPARING','QUEUED','RUNNING') RETURNING id`
+        : `UPDATE runs SET status=$1::varchar, updated_at=now()
+            WHERE id=$2::uuid AND status IN ('PREPARING','QUEUED','RUNNING') RETURNING id`,
       [targetStatus, req.params.id],
     );
     if (!updated.rowCount) throw new ApiError(409, 'RUN_NOT_CANCELLABLE', 'این اجرا قابل لغو نیست.');

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { api, runEventsUrl } from './api';
 import type { Run } from './types';
 
@@ -22,23 +22,36 @@ export function normalizeRun(row: Record<string, unknown> | Run): Run {
   } as Run;
 }
 
+/**
+ * Keep one EventSource per live run id. Callback identity must not reopen the
+ * stream — RunsPage passes an inline setter that would otherwise reconnect forever.
+ */
 export function useRunPoll(lastRun: Run | null, setLastRun: (run: Run) => void) {
+  const setRef = useRef(setLastRun);
+  setRef.current = setLastRun;
+
   useEffect(() => {
-    if (!lastRun || !LIVE.has(lastRun.status)) return;
+    if (!lastRun || !LIVE.has(lastRun.status)) return undefined;
+    const runId = lastRun.id;
     let cancelled = false;
+    let errorFallbackAt = 0;
     const apply = (row: Run) => {
-      if (!cancelled) setLastRun(normalizeRun(row));
+      if (!cancelled) setRef.current(normalizeRun(row));
     };
-    const source = new EventSource(runEventsUrl(lastRun.id), { withCredentials: true });
+    const source = new EventSource(runEventsUrl(runId), { withCredentials: true });
     source.onmessage = event => {
       try { apply(JSON.parse(event.data) as Run); } catch { /* ignore malformed frames */ }
     };
     source.onerror = () => {
-      api<Run>(`/api/runs/${lastRun.id}`).then(apply).catch(() => undefined);
+      // EventSource auto-reconnects; only fall back to REST occasionally.
+      const now = Date.now();
+      if (now - errorFallbackAt < 5_000) return;
+      errorFallbackAt = now;
+      api<Run>(`/api/runs/${runId}`).then(apply).catch(() => undefined);
     };
     return () => {
       cancelled = true;
       source.close();
     };
-  }, [lastRun?.id, lastRun?.status, setLastRun]);
+  }, [lastRun?.id, lastRun?.status]);
 }

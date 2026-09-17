@@ -12,7 +12,15 @@ function encryptionMaterial() {
   return resolveEncryptionKey();
 }
 
-const encryptionKey = createHash('sha256').update(encryptionMaterial()).digest();
+let cachedEncryptionKey;
+
+/** Resolve after dotenv so API/runner never disagree on the session key. */
+function encryptionKey() {
+  if (!cachedEncryptionKey) {
+    cachedEncryptionKey = createHash('sha256').update(encryptionMaterial()).digest();
+  }
+  return cachedEncryptionKey;
+}
 
 function normalizePackKey(value) {
   return String(value || '').trim();
@@ -20,7 +28,7 @@ function normalizePackKey(value) {
 
 function encrypt(value, purpose = 'runtime-session') {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', encryptionKey, iv);
+  const cipher = createCipheriv('aes-256-gcm', encryptionKey(), iv);
   cipher.setAAD(Buffer.from(`automation-tool-runtime:${purpose}`));
   const ciphertext = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64url');
@@ -32,7 +40,7 @@ function decrypt(value, purpose = 'runtime-session') {
   const iv = packed.subarray(0, 12);
   const tag = packed.subarray(12, 28);
   const ciphertext = packed.subarray(28);
-  const decipher = createDecipheriv('aes-256-gcm', encryptionKey, iv);
+  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), iv);
   decipher.setAAD(Buffer.from(`automation-tool-runtime:${purpose}`));
   decipher.setAuthTag(tag);
   return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
@@ -155,11 +163,21 @@ async function findConnectedRuntimeSession(pool, userId, { projectKey, environme
   return null;
 }
 
+function encryptBrowserStorageState(storageState) {
+  return encrypt(storageState, 'extension-browser-storage');
+}
+
+function decryptBrowserStorageState(value) {
+  return decrypt(value, 'extension-browser-storage');
+}
+
 module.exports = {
   SESSION_TTL_SECONDS,
   createLoginChallenge,
+  decryptBrowserStorageState,
   deleteAllRuntimeSessionsForUser,
   deleteRuntimeSession,
+  encryptBrowserStorageState,
   findConnectedRuntimeSession,
   getRuntimeSession,
   normalizePackKey,

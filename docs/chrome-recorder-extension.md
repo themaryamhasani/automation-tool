@@ -22,7 +22,7 @@ Automation Tool Web --one-time external message--> Chrome Extension <--> current
                                                               existing Runner
 ```
 
-The extension owns capture, element selection, local testing, and local trace creation. The API owns authentication, authorization, source validation, file persistence, and run creation. The existing Runner executes immutable saved source snapshots. No Chrome cookies, storage state, Playwright objects, or personal profile data are sent to the API or Runner.
+The extension owns capture, element selection, local testing, and local trace creation. The API owns authentication, authorization, source validation, file persistence, and run creation. The existing Runner executes immutable saved source snapshots. Recorded `.spec` source never embeds cookies or `storageState`. On **Save & Run** only, the extension exports the attached tab’s Playwright `storageState`, the API encrypts it into `run_requests.tool_options` for that run, and the Runner injects it as `E2E_STORAGE_STATE` then clears the ciphertext after completion.
 
 ## Pairing and credentials
 
@@ -40,7 +40,8 @@ An empty `project_ids` array is an explicit no-access scope. All project, enviro
 
 ```text
 record → normalize → client protection → API AST validation
-       → atomic file upsert → optional existing run creation → existing Runner
+       → atomic file upsert → optional run creation (+ encrypted browser storageState)
+       → existing Runner (storageState → E2E_STORAGE_STATE, then wipe ciphertext)
 ```
 
 The API parser detects clear literal passwords/tokens in sensitive fills, simple variable indirection, authentication/cookie headers, cookie writes, storage-state use, JWT-like values, and common credential prefixes. It returns line/category/severity/message/remediation without returning the detected value. This is defense in depth, not a claim of perfect secret detection.

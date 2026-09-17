@@ -60,9 +60,12 @@ test('RunReportPanel and RunsPage surface delta UX', () => {
   assert.match(panel, /رگرسیون/);
   assert.match(panel, /هنوز باز/);
   assert.match(panel, /رفع‌شده/);
+  assert.match(panel, /FailureScreenshot|اسکرین‌شات شکست/);
+  assert.match(panel, /artifactObjectUrl/);
   assert.match(page, /Δ نسبت به قبلی/);
   assert.match(page, /previousRun/);
   assert.match(page, /بدتر از قبلی/);
+  assert.match(page, /نتیجه بعد از اتمام/);
 });
 
 test('openapi documents runs delta', () => {

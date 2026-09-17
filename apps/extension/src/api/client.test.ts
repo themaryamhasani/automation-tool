@@ -40,4 +40,38 @@ describe('Automation API client', () => {
     expect(authFetch.mock.calls[0]?.[0]).toBe('http://localhost:4280/api/files/upsert');
     expect(authFetch.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' });
   });
+
+  it('creates a chrome-extension run against the shared /api/runs path', async () => {
+    const authFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        projectId: 'project-1',
+        testFileId: 'file-1',
+        toolKind: 'PLAYWRIGHT',
+        triggerSource: 'chrome-extension',
+        browserStorageState: {
+          cookies: [{ name: 'sid', value: 'abc', domain: 'example.test' }],
+        },
+      });
+      return new Response(JSON.stringify({ id: 'run-1', status: 'QUEUED', projectId: 'project-1', testFileId: 'file-1' }), {
+        status: 201, headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new AutomationApiClient('http://localhost:4280', authFetch);
+    await expect(client.createRun({
+      projectId: 'project-1',
+      testFileId: 'file-1',
+      environmentId: 'env-1',
+      browserStorageState: { cookies: [{ name: 'sid', value: 'abc', domain: 'example.test' }] },
+    })).resolves.toMatchObject({ id: 'run-1', status: 'QUEUED' });
+    expect(authFetch.mock.calls[0]?.[0]).toBe('http://localhost:4280/api/runs');
+  });
+
+  it('maps runner/environment failures to RUN_FAILED', async () => {
+    const client = new AutomationApiClient('http://localhost:4280', vi.fn(async () => new Response(JSON.stringify({
+      code: 'ENVIRONMENT_REQUIRED', message: 'محیط فعال انتخاب کنید.',
+    }), { status: 422 })));
+    await expect(client.createRun({ projectId: 'p', testFileId: 'f' }))
+      .rejects.toMatchObject({ code: 'RUN_FAILED' } satisfies Partial<ExtensionError>);
+  });
 });

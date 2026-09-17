@@ -93,7 +93,7 @@ Runner کد تست را اجرا می‌کند و باید در محیط product
 
 تا زمان فعال‌شدن انتشار در Chrome Web Store، افزونه به‌صورت موقت با **Load unpacked** از پوشه `apps/extension/dist` نصب می‌شود. شناسه‌ای که Chrome نشان می‌دهد باید در `VITE_CHROME_EXTENSION_ID` قرار بگیرد و وب‌اپ دوباره build شود. سپس کاربر در صفحه «Chrome Recorder» با یک کلیک و بدون مشاهده token یا URL آن را pair می‌کند، پروژه و نام تست را انتخاب می‌کند و **Start Recording** را می‌زند. اتصال تب به‌صورت داخلی انجام می‌شود. Save از upsert اتمیک فایل و اعتبارسنجی AST سمت سرور استفاده می‌کند و Save & Run همان صف و Runner اصلی را صدا می‌زند.
 
-رمزها، token/headerهای احراز هویت، cookie و storage state ذخیره یا به API ارسال نمی‌شوند؛ مقادیر ورودی حساس با ENV placeholder جایگزین و پیش از ذخیره دوباره در API تحلیل می‌شوند. راهنمای معماری و لینک راهنماهای جداگانه کاربر، ادمین و توسعه‌دهنده در [docs/chrome-recorder-extension.md](docs/chrome-recorder-extension.md) است.
+رمزها و credentialهای داخل سورس تست ذخیره یا به API ارسال نمی‌شوند (جایگزین ENV + اعتبارسنجی AST). برای **Save & Run**، کوکی‌های نشست تب فعلی به‌صورت Playwright `storageState` فقط برای همان اجرا گرفته، رمزنگاری و پس از اتمام ران پاک می‌شوند؛ داخل فایل `.spec` نوشته نمی‌شوند. راهنمای معماری و لینک راهنماهای جداگانه کاربر، ادمین و توسعه‌دهنده در [docs/chrome-recorder-extension.md](docs/chrome-recorder-extension.md) است.
 
 ## بررسی سلامت
 

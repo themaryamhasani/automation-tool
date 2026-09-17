@@ -103,6 +103,20 @@ export async function downloadArtifact(id: string, fileName: string) {
   triggerDownload(blob, fileName);
 }
 
+/** Fetch an artifact as a blob URL (caller must revoke). */
+export async function artifactObjectUrl(id: string): Promise<string> {
+  const headers = withAuth(new Headers());
+  const response = await fetch(`${API_BASE}/api/artifacts/${encodeURIComponent(id)}/download`, {
+    headers,
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.message || 'خواندن فایل خروجی ناموفق بود.');
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
 export async function downloadReportExcel(reportId: string, query: URLSearchParams, fileName: string) {
   const headers = withAuth(new Headers());
   const response = await fetch(`${API_BASE}/api/reports/${encodeURIComponent(reportId)}/excel?${query}`, {

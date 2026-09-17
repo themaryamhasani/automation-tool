@@ -27,6 +27,10 @@ const CODE_MAP: Record<string, ExtensionErrorCode> = {
   INVALID_SOURCE: 'INVALID_SOURCE',
   SECRET_VALIDATION_FAILED: 'SECRET_VALIDATION_FAILED',
   EXTENSION_AUTH_EXPIRED: 'AUTH_EXPIRED',
+  ENVIRONMENT_REQUIRED: 'RUN_FAILED',
+  RUNNER_DISABLED: 'RUN_FAILED',
+  FILE_REQUIRED: 'INVALID_SOURCE',
+  PROJECT_REQUIRED: 'PROJECT_REMOVED',
 };
 
 export class AutomationApiClient {
@@ -106,6 +110,10 @@ export class AutomationApiClient {
     projectId: string;
     testFileId: string;
     environmentId?: string;
+    browserStorageState?: {
+      cookies: Array<Record<string, unknown>>;
+      origins?: Array<Record<string, unknown>>;
+    };
   }): Promise<RunSummary> {
     return this.request('/api/runs', {
       method: 'POST',
@@ -121,6 +129,7 @@ export class AutomationApiClient {
         trace: 'retain-on-failure',
         reporter: 'json',
         triggerSource: 'chrome-extension',
+        ...(input.browserStorageState ? { browserStorageState: input.browserStorageState } : {}),
       }),
     });
   }

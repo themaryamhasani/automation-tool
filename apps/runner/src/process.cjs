@@ -389,20 +389,31 @@ function browserChannel(executable) {
   return process.env.PW_CHANNEL || '';
 }
 
-function writePlaywrightConfig({ testDir, specFile, baseURL, headed, jsonFile, playwrightRequire }) {
+function writePlaywrightConfig({
+  testDir, specFile, baseURL, headed, jsonFile, playwrightRequire, timeoutMs,
+  actionTimeoutMs, navigationTimeoutMs, outputDir,
+}) {
   const chrome = chromePath();
   const channel = browserChannel(chrome);
   const req = playwrightRequire || '@playwright/test';
+  const timeout = Math.max(5_000, Number(timeoutMs || process.env.E2E_TEST_TIMEOUT_MS || 60_000));
+  const actionTimeout = actionTimeoutMs == null
+    ? null
+    : Math.max(1_000, Math.min(timeout, Number(actionTimeoutMs) || 15_000));
+  const navigationTimeout = navigationTimeoutMs == null
+    ? null
+    : Math.max(1_000, Math.min(timeout, Number(navigationTimeoutMs) || 30_000));
   return `const { defineConfig, devices } = require(${JSON.stringify(req)});
 module.exports = defineConfig({
   testDir: ${JSON.stringify(testDir)},
   ${specFile ? `testMatch: ${JSON.stringify(specFile)},` : ''}
+  ${outputDir ? `outputDir: ${JSON.stringify(outputDir)},` : ''}
   fullyParallel: false,
   forbidOnly: false,
   retries: 0,
   workers: 1,
   reporter: [['list'], ['json', { outputFile: ${JSON.stringify(jsonFile)} }]],
-  timeout: Number(process.env.E2E_TEST_TIMEOUT_MS || 60_000),
+  timeout: ${timeout},
   use: {
     baseURL: ${JSON.stringify(baseURL || '')} || undefined,
     headless: ${headed ? 'false' : 'true'},
@@ -410,6 +421,8 @@ module.exports = defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     storageState: process.env.E2E_STORAGE_STATE_PARENT || process.env.E2E_STORAGE_STATE || undefined,
+    ${actionTimeout != null ? `actionTimeout: ${actionTimeout},` : ''}
+    ${navigationTimeout != null ? `navigationTimeout: ${navigationTimeout},` : ''}
     ${channel ? `channel: ${JSON.stringify(channel)},` : chrome ? `launchOptions: { executablePath: ${JSON.stringify(chrome)} },` : ''}
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
@@ -465,6 +478,49 @@ function findRepoPlaywrightConfig(root) {
     .find(item => fs.existsSync(item)) || null;
 }
 
+function persistedPlaywrightJob({
+  workspace,
+  testsDir,
+  specFileName,
+  baseURL,
+  headed,
+  jsonFile,
+  runnerRoot,
+  timeoutSeconds,
+}) {
+  const install = resolvePlaywrightInstall(runnerRoot || RUNNER_ROOT);
+  const specBase = String(specFileName || 'test.spec.js').replace(/\\/g, '/');
+  const absTestsDir = path.resolve(testsDir);
+  const absWorkspace = path.resolve(workspace);
+  const configPath = path.join(absWorkspace, 'playwright.config.cjs');
+  fs.writeFileSync(configPath, writePlaywrightConfig({
+    testDir: absTestsDir,
+    specFile: specBase,
+    baseURL: baseURL || '',
+    headed: Boolean(headed),
+    jsonFile,
+    playwrightRequire: install.requirePath,
+    timeoutMs: Math.max(5, Number(timeoutSeconds || 60)) * 1000,
+    actionTimeoutMs: 15_000,
+    navigationTimeoutMs: 30_000,
+    outputDir: path.join(absWorkspace, 'test-results'),
+  }), 'utf8');
+  const testArg = path.join(absTestsDir, specBase).replace(/\\/g, '/');
+  return {
+    command: process.execPath,
+    args: [...playwrightNodeArgs(install, absWorkspace), 'test', '--config', configPath, testArg],
+    cwd: install.root,
+    configPath,
+    jsonFile,
+    install,
+    envExtra: {
+      PW_CHANNEL: process.env.PW_CHANNEL || browserChannel(chromePath()) || 'chrome',
+      E2E_TEST_TIMEOUT_MS: String(Math.max(5, Number(timeoutSeconds || 60)) * 1000),
+      NODE_PATH: path.join(install.root, 'node_modules'),
+    },
+  };
+}
+
 function playwrightRepoJob({ sourceRoot, specPath, workspace }) {
   ensureSharedEsmPackage(sourceRoot);
   restoreAutomationPlaywrightStashes(path.join(sourceRoot, 'node_modules'));
@@ -507,7 +563,11 @@ module.exports = {
   spawnLogged,
   runProcess,
   playwrightJob,
+  persistedPlaywrightJob,
   playwrightRepoJob,
+  playwrightNodeArgs,
+  writePlaywrightConfig,
+  browserChannel,
   findRepoPlaywrightConfig,
   findPlaywrightInstalls,
   resolvePlaywrightInstall,

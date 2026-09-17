@@ -1,9 +1,15 @@
 import { crx, type CrxApplication, type Page } from 'playwright-crx';
-import type { SessionMode, SessionState } from '../messaging/contracts';
+import type { BrowserStorageState, SessionMode, SessionState } from '../messaging/contracts';
 import { RECORDER_LANGUAGE, isAttachableUrl } from '../shared/constants';
 import { ExtensionError, redactLogText, serializeError, toExtensionError } from '../shared/errors';
 import { loadSettings } from '../storage/settings';
 import { createInitialSessionState, recoverSessionState } from './session-state';
+import {
+  assessBrowserSession,
+  enrichStorageStateWithCdpCookies,
+  enrichStorageStateWithChromeCookies,
+  enrichStorageStateWithDebuggerCookies,
+} from './chrome-cookies';
 import type { BrowserAutomationAdapter } from './automation-adapter';
 
 const TRACE_PATH = '/tmp/automation-tool-trace.zip';
@@ -74,7 +80,19 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
   disconnect(): Promise<SessionState> { return this.detach(); }
 
   async startRecording(): Promise<SessionState> {
-    const active = (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    const attachedId = this.state.attachedTabId;
+    if (attachedId != null) {
+      try {
+        const attached = await chrome.tabs.get(attachedId);
+        if (attached?.id && isAttachableUrl(attached.url)) {
+          if (this.page && this.state.attachedTabId === attached.id) return this.setRecorderMode('recording');
+          return this.attach(attached.id, 'recording');
+        }
+      } catch {
+        // Attached tab was closed; fall through to the focused browser tab.
+      }
+    }
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!active?.id || !isAttachableUrl(active.url)) throw new ExtensionError('UNSUPPORTED_PAGE');
     if (!this.page || this.state.attachedTabId !== active.id) return this.attach(active.id, 'recording');
     return this.setRecorderMode('recording');
@@ -96,6 +114,45 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
   runLocally(source: string, trace = false): Promise<SessionState> { return this.replay(source, trace); }
 
   stopLocalRun(): Promise<SessionState> { return this.stopReplay(); }
+
+  async exportStorageState(): Promise<{ state: SessionState; storageState: BrowserStorageState }> {
+    await this.initialized;
+    if (!this.page || this.state.attachedTabId == null) {
+      const tabId = this.state.attachedTabId
+        ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id;
+      if (tabId == null) throw new ExtensionError('REATTACH_REQUIRED', 'Attach to the logged-in page before Save & Run.');
+      await this.attach(tabId);
+    }
+    const { page } = await this.attachedPage();
+    try {
+      const raw = await page.context().storageState() as BrowserStorageState;
+      const pageUrl = page.url() || this.state.tabUrl || '';
+      let storageState = await enrichStorageStateWithChromeCookies(raw, pageUrl);
+      storageState = await enrichStorageStateWithCdpCookies(page, storageState, pageUrl);
+      storageState = await enrichStorageStateWithDebuggerCookies(this.state.attachedTabId, storageState, pageUrl);
+      const assessment = assessBrowserSession(storageState, pageUrl);
+      if (!assessment.ok) {
+        const domains = assessment.domains.join(', ') || 'none';
+        const detail = assessment.reason === 'missing-sso'
+          ? `No soha/app login cookies were readable (captured ${assessment.total} cookie(s) on ${domains}).`
+          : assessment.reason === 'not-on-app-page'
+            ? `App cookies exist, but this tab is not on an authenticated /camp/ page (captured ${assessment.total} on ${domains}).`
+            : assessment.reason === 'thin-session'
+              ? `Only analytics/thin cookies were captured (${assessment.total} on ${domains}).`
+              : assessment.reason === 'no-host-cookies'
+                ? `No app/SSO cookies matched this site (domains: ${domains}).`
+                : 'No login cookies were found on this tab.';
+        throw new ExtensionError(
+          'RUN_FAILED',
+          `${detail} Stay on https://adib.m.edus.ir/camp/... while signed in, Reload the extension, attach that tab, then Save & Run again.`,
+        );
+      }
+      return { state: this.snapshot(), storageState };
+    } catch (error) {
+      if (error instanceof ExtensionError) throw error;
+      throw toExtensionError(error, 'RUN_FAILED');
+    }
+  }
 
   private async update(patch: Partial<SessionState>): Promise<SessionState> {
     this.state = { ...this.state, ...patch, updatedAt: new Date().toISOString() };
@@ -125,36 +182,54 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
     if (this.app) return this.app;
     if (!this.appPromise) {
       const settings = await loadSettings();
-      this.appPromise = crx.start({ slowMo: settings.slowMo }).then((app) => {
-        this.app = app;
-        app.on('detached', (tabId) => {
-          console.warn(JSON.stringify({ event: 'playwright-crx-detached', tabId, closing: this.closing }));
-          if (!this.closing && tabId === this.state.attachedTabId) {
-            this.page = null;
-            void this.update({
-              mode: 'reattach-required',
-              active: false,
-              canReplay: false,
-              lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'Chrome disconnected from this page. Reconnect to continue.')),
-            });
-          }
-        });
-        app.recorder.on('modechanged', ({ mode }) => {
-          const next = this.sessionMode(mode);
-          if (!['playing', 'error', 'disconnected', 'reattach-required'].includes(this.state.mode)) {
-            void this.update({ mode: next, lastError: null });
-          }
-        });
-        app.recorder.on('hide', () => {
-          if (!this.closing) void this.detach();
-        });
-        return app;
-      }).catch((error) => {
-        this.appPromise = null;
-        throw error;
-      });
+      this.appPromise = this.bootCrx(settings, false);
     }
     return this.appPromise;
+  }
+
+  private async bootCrx(settings: { slowMo: number }, retried: boolean): Promise<CrxApplication> {
+    try {
+      const app = await crx.start({ slowMo: settings.slowMo });
+      this.app = app;
+      app.on('detached', (tabId) => {
+        console.warn(JSON.stringify({ event: 'playwright-crx-detached', tabId, closing: this.closing }));
+        if (!this.closing && tabId === this.state.attachedTabId) {
+          this.page = null;
+          void this.update({
+            mode: 'reattach-required',
+            active: false,
+            canReplay: false,
+            lastError: serializeError(new ExtensionError('REATTACH_REQUIRED', 'Chrome disconnected from this page. Reconnect to continue.')),
+          });
+        }
+      });
+      app.recorder.on('modechanged', ({ mode }) => {
+        const next = this.sessionMode(mode);
+        if (!['playing', 'error', 'disconnected', 'reattach-required'].includes(this.state.mode)) {
+          void this.update({ mode: next, lastError: null });
+        }
+      });
+      app.recorder.on('hide', () => {
+        if (!this.closing) void this.detach();
+      });
+      return app;
+    } catch (error) {
+      this.appPromise = null;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!retried && /already started|already running|has already been started/i.test(message)) {
+        // Lost the app handle while the CRX singleton is still live — close best-effort and retry once.
+        this.closing = true;
+        try {
+          if (this.app) await this.app.close().catch(() => undefined);
+        } finally {
+          this.app = null;
+          this.page = null;
+          this.closing = false;
+        }
+        return this.bootCrx(settings, true);
+      }
+      throw error;
+    }
   }
 
   private sessionMode(mode: string): SessionMode {
@@ -170,21 +245,39 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
     return { app: this.app, page: this.page };
   }
 
+  private async resolveAttachTab(tabId?: number): Promise<chrome.tabs.Tab> {
+    if (tabId != null) {
+      const tab = await chrome.tabs.get(tabId);
+      if (!tab?.id || !isAttachableUrl(tab.url)) throw new ExtensionError('UNSUPPORTED_PAGE');
+      return tab;
+    }
+    if (this.state.attachedTabId != null) {
+      try {
+        const remembered = await chrome.tabs.get(this.state.attachedTabId);
+        if (remembered?.id && isAttachableUrl(remembered.url)) return remembered;
+      } catch {
+        // Tab closed; fall through to focused tab.
+      }
+    }
+    const [focused] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!focused?.id || !isAttachableUrl(focused.url)) throw new ExtensionError('UNSUPPORTED_PAGE');
+    return focused;
+  }
+
   async attach(tabId?: number, mode: 'none' | 'recording' | 'inspecting' = 'none'): Promise<SessionState> {
     await this.initialized;
-    const tab = tabId == null
-      ? (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
-      : await chrome.tabs.get(tabId);
-    if (!tab?.id || !isAttachableUrl(tab.url)) throw new ExtensionError('UNSUPPORTED_PAGE');
+    const tab = await this.resolveAttachTab(tabId);
     if (this.page && this.state.attachedTabId === tab.id) {
       if (mode !== 'none') await this.setRecorderMode(mode);
       return this.update({ tabTitle: tab.title || '', tabUrl: tab.url || '', active: tab.active, lastError: null });
     }
-    if (this.page || this.app) await this.detach();
+    // Only tear down when a different live page is attached. Keep the CRX app when
+    // reconnecting after debuggerDetached (page null, app still alive).
+    if (this.page) await this.detach();
 
     await this.update({
       mode: 'attaching',
-      attachedTabId: tab.id,
+      attachedTabId: tab.id!,
       tabTitle: tab.title || '',
       tabUrl: tab.url || '',
       active: tab.active,
@@ -205,7 +298,7 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
         await chrome.runtime.sendMessage({ type: 'RECORDER_CONNECT_REQUIRED' }).catch(() => undefined);
         await showing;
       }
-      this.page = await app.attach(tab.id);
+      this.page = await app.attach(tab.id!);
       this.page.on('close', () => {
         if (!this.closing && this.state.attachedTabId === tab.id) void this.tabClosed(tab.id!);
       });
@@ -363,9 +456,9 @@ export class PlaywrightCrxAdapter implements BrowserAutomationAdapter {
   async debuggerDetached(tabId: number, reason?: string): Promise<void> {
     console.warn(JSON.stringify({ event: 'chrome-debugger-detached', tabId, reason: reason || 'unknown', closing: this.closing }));
     if (this.closing || this.state.attachedTabId !== tabId) return;
+    // Keep the CRX app alive — nulling it without close() makes the next crx.start()
+    // fail with "already started" until the extension is reloaded.
     this.page = null;
-    this.app = null;
-    this.appPromise = null;
     const detail = reason && reason !== 'unknown' ? ` (${reason.replace(/_/g, ' ')})` : '';
     await this.update({
       mode: 'reattach-required',

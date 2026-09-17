@@ -1,5 +1,6 @@
 import { ExtensionError } from '../shared/errors';
 import { sanitizeSource } from './sanitizer';
+import { hardenRecordedSource } from './harden-recorded-source';
 import type { PreparedRecording } from './types';
 
 function quoteTitle(value: string): string {
@@ -46,7 +47,7 @@ export function normalizeRecorderSource(raw: string, testName: string): string {
   }
 
   if (!/\b(?:page\.|expect\()/.test(source)) throw new ExtensionError('INVALID_SOURCE');
-  return `${source.trim()}\n`;
+  return `${hardenRecordedSource(source.trim())}\n`;
 }
 
 export function validatePreparedSource(source: string): void {

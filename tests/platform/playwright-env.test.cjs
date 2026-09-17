@@ -91,6 +91,16 @@ test('generated Playwright config applies parent storageState from env', () => {
   assert.match(source, /storageState: process\.env\.E2E_STORAGE_STATE_PARENT \|\| process\.env\.E2E_STORAGE_STATE \|\| undefined/);
 });
 
+test('persisted Playwright jobs set short actionTimeout so stuck clicks fail fast', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../../apps/runner/src/process.cjs'), 'utf8');
+  assert.match(source, /actionTimeoutMs/);
+  assert.match(source, /navigationTimeoutMs/);
+  assert.match(source, /actionTimeoutMs:\s*15_000/);
+  assert.match(source, /navigationTimeoutMs:\s*30_000/);
+  assert.match(source, /actionTimeout:/);
+  assert.match(source, /navigationTimeout:/);
+});
+
 test('IS Playwright prefers the pack playwright.config like a local npm run', () => {
   const tools = fs.readFileSync(path.resolve(__dirname, '../../apps/runner/src/tools.cjs'), 'utf8');
   assert.match(tools, /findRepoPlaywrightConfig\(paths\.e2eCwd\)/);

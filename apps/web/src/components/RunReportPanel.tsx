@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ChevronDown, FileText, MinusCircle, Terminal, XCircle } from 'lucide-react';
-import { api, fetchText } from '../api';
-import type { Run, RunReportTest } from '../types';
+import { api, artifactObjectUrl, fetchText } from '../api';
+import type { Artifact, Run, RunReportTest } from '../types';
 import { Badge, cn } from './ui';
 
 const STATUS_FA: Record<string, string> = {
@@ -67,6 +67,48 @@ function errorText(run: Run) {
   return logExcerpt(run.logs);
 }
 
+function failureScreenshots(artifacts?: Artifact[] | null) {
+  return (artifacts || []).filter(item => (
+    item.kind === 'SCREENSHOT'
+    || (/\.png$/i.test(item.fileName) && /failed|test-failed/i.test(item.fileName))
+  ));
+}
+
+function FailureScreenshot({ artifact }: { artifact: Artifact }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let revoked = '';
+    let cancelled = false;
+    artifactObjectUrl(artifact.id)
+      .then(objectUrl => {
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        revoked = objectUrl;
+        setUrl(objectUrl);
+      })
+      .catch(() => { if (!cancelled) setUrl(''); });
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [artifact.id]);
+  if (!url) {
+    return <p className="text-[11px] text-slate-500">در حال بارگذاری اسکرین‌شات…</p>;
+  }
+  return (
+    <figure className="space-y-1">
+      <img
+        src={url}
+        alt={artifact.fileName}
+        className="max-h-56 w-full rounded-lg border border-slate-700 object-contain bg-slate-950"
+      />
+      <figcaption className="truncate font-mono text-[10px] text-slate-500" dir="ltr">{artifact.fileName}</figcaption>
+    </figure>
+  );
+}
+
 export function IdleReportDock() {
   return (
     <div className="h-full border-t border-slate-800 bg-[#071018] px-3 py-2">
@@ -104,6 +146,7 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
   const skipOnly = !running && failedCount === 0 && passed === 0 && skipped > 0;
   const boardPath = run.reportPaths?.board || run.reportPaths?.product;
   const message = failed ? errorText(run) : '';
+  const shots = failureScreenshots(run.artifacts);
   const badgeTone = running ? 'blue' : run.status === 'FAILED' || run.status === 'ERROR' ? 'red' : skipOnly ? 'amber' : run.status === 'PASSED' ? 'green' : 'amber';
   const badgeLabel = skipOnly ? 'اسکیپ‌شده' : (STATUS_FA[run.status] || run.status);
   const summary = delta?.delta.summary;
@@ -157,11 +200,16 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
         { label: 'PASS', value: passed, tone: dark ? 'bg-emerald-500/15 text-emerald-300' : 'bg-emerald-50 text-emerald-700' },
         { label: 'FAIL', value: failedCount, tone: dark ? 'bg-red-500/15 text-red-300' : 'bg-red-50 text-red-700' },
         { label: 'SKIP', value: skipped, tone: dark ? 'bg-amber-500/15 text-amber-200' : 'bg-amber-50 text-amber-800' },
-      ].map(card => <div key={card.label} className={cn('rounded-lg px-2 py-1.5', card.tone)}>
+      ].map(card => <div key={card.label} className={cn('rounded-lg px-2 py-1', card.tone)}>
         <p className="text-[10px] opacity-80">{card.label}</p>
-        <p className="mt-0.5 text-base font-bold">{card.value.toLocaleString('fa-IR')}</p>
+        <p className="mt-0.5 text-sm font-bold leading-none">{card.value.toLocaleString('fa-IR')}</p>
       </div>)}
     </div>
+    {failed && total === 0 && (
+      <p className={cn('mx-3 mb-2 rounded-lg px-2 py-1.5 text-[11px] leading-5', dark ? 'bg-amber-500/10 text-amber-100' : 'bg-amber-50 text-amber-900')}>
+        هیچ تستی اجرا نشد (PASS خالی به‌معنای موفقیت نیست). علت معمولاً در لاگ پایین است — برای مثال مسیر فایل یا تنظیمات Runner.
+      </p>
+    )}
     {summary && (
       <div className="mx-3 mb-2 grid grid-cols-3 gap-2">
         <div className={cn('rounded-lg px-2 py-1.5', dark ? 'bg-red-500/10 text-red-200' : 'bg-red-50 text-red-700')}>
@@ -191,6 +239,12 @@ export function RunReportPanel({ run, tone = 'dark' }: { run: Run; tone?: 'dark'
         : <> معمولاً شناسه instance یا فایل لاگین (<code dir="ltr">storageState</code> / <code dir="ltr">PREREG_COOKIE</code>) در <code dir="ltr">.env</code> نیست.</>}
     </p>}
     {message && <pre className="mx-3 mb-2 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-red-500/10 px-2 py-1.5 font-mono text-[10px] leading-4 text-red-300" dir="ltr">{message}</pre>}
+    {shots.length > 0 && (
+      <div className="mx-3 mb-2 space-y-2">
+        <p className={cn('text-[11px] font-medium', dark ? 'text-slate-400' : 'text-gray-500')}>اسکرین‌شات شکست (همان چیزی که مرورگر سرور دید)</p>
+        {shots.slice(0, 3).map(shot => <FailureScreenshot key={shot.id} artifact={shot} />)}
+      </div>
+    )}
     {details.length > 0 && <div className="max-h-32 space-y-1 overflow-auto px-3 pb-2">
       {details.map((item, index) => {
         const tone = outcomeTone(item.outcome);

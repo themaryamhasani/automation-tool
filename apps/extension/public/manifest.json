@@ -21,6 +21,7 @@
   "permissions": [
     "activeTab",
     "contextMenus",
+    "cookies",
     "debugger",
     "downloads",
     "offscreen",
@@ -30,7 +31,14 @@
   ],
   "host_permissions": [
     "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://*.m.edus.ir/*",
+    "https://*.edus.ir/*",
+    "https://*.medu.ir/*",
+    "https://adib.m.edus.ir/*",
+    "https://soha.m.edus.ir/*",
+    "https://soha.medu.ir/*",
+    "https://www.soha.medu.ir/*"
   ],
   "externally_connectable": {
     "matches": [

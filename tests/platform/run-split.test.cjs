@@ -134,3 +134,77 @@ test('insertRun writes children and completeRun updates results/logs', async () 
     await client.end();
   }
 });
+
+test('cancel run status update casts varchar so postgres does not raise 42P08', async () => {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  const stamp = Date.now();
+  let runId;
+  let projectId;
+  let userId;
+  try {
+    await applySearchPath(client);
+    const user = await client.query(
+      `INSERT INTO users (full_name, email, password_hash, role)
+       VALUES ($1,$2,'x','ADMIN') RETURNING id`,
+      [`Run Cancel ${stamp}`, `run-cancel-${stamp}@automation.local`],
+    );
+    userId = user.rows[0].id;
+    const project = await client.query(
+      `INSERT INTO projects (name, code, source_approach) VALUES ($1,$2,'ZIP') RETURNING id`,
+      [`run-cancel-${stamp}`, `rc-${stamp}`],
+    );
+    projectId = project.rows[0].id;
+    const env = await client.query(
+      `INSERT INTO environments (project_id, name, base_url) VALUES ($1,'local','http://127.0.0.1') RETURNING id`,
+      [projectId],
+    );
+    const created = await insertRun(client, {
+      core: {
+        project_id: projectId,
+        environment_id: env.rows[0].id,
+        test_file_path: 'recorded/recorded-test.spec.ts',
+        requested_by: userId,
+        status: 'RUNNING',
+        source_approach: 'ZIP',
+        tool_kind: 'PLAYWRIGHT',
+      },
+      request: { browser_projects: ['chromium'], workers: 1, timeout_seconds: 60 },
+      source: { source_snapshot: "import { test } from '@playwright/test';\n" },
+    });
+    runId = created.id;
+    const cancelRequested = await client.query(
+      `UPDATE runs SET status=$1::varchar, updated_at=now()
+        WHERE id=$2 AND status IN ('PREPARING','QUEUED','RUNNING') RETURNING status`,
+      ['CANCEL_REQUESTED', runId],
+    );
+    assert.equal(cancelRequested.rowCount, 1);
+    assert.equal(cancelRequested.rows[0].status, 'CANCEL_REQUESTED');
+    const cancelled = await client.query(
+      `UPDATE runs SET status=$1::varchar, completed_at=now(), updated_at=now()
+        WHERE id=$2 AND status='QUEUED' RETURNING status`,
+      ['CANCELLED', runId],
+    );
+    assert.equal(cancelled.rowCount, 0);
+    await client.query(
+      `UPDATE runs SET status='QUEUED', completed_at=NULL, updated_at=now() WHERE id=$1`,
+      [runId],
+    );
+    const immediateCancel = await client.query(
+      `UPDATE runs SET status=$1::varchar, completed_at=now(), updated_at=now()
+        WHERE id=$2 AND status IN ('PREPARING','QUEUED','RUNNING') RETURNING status, completed_at`,
+      ['CANCELLED', runId],
+    );
+    assert.equal(immediateCancel.rowCount, 1);
+    assert.equal(immediateCancel.rows[0].status, 'CANCELLED');
+    assert.ok(immediateCancel.rows[0].completed_at);
+  } finally {
+    if (runId) await client.query('DELETE FROM runs WHERE id=$1', [runId]);
+    if (projectId) {
+      await client.query('DELETE FROM environments WHERE project_id=$1', [projectId]);
+      await client.query('DELETE FROM projects WHERE id=$1', [projectId]);
+    }
+    if (userId) await client.query('DELETE FROM users WHERE id=$1', [userId]);
+    await client.end();
+  }
+});

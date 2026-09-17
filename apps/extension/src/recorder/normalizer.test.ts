@@ -26,4 +26,13 @@ describe('recording normalizer', () => {
     expect(prepared.fileName).toBe('example.spec.ts');
     expect(prepared.source).toContain("from '@playwright/test'");
   });
+
+  it('hardens MUI autocomplete option clicks for Runner compatibility', () => {
+    const result = normalizeRecorderSource(`import { test, expect } from '@playwright/test';
+test('old', async ({ page }) => {
+  await page.getByRole('combobox', { name: 'چهارچوب' }).fill('ابتدایی');
+  await page.getByRole('option', { name: 'ابتدایی (درون شهرستانی-چند روزه پایه ششم تا 7 نفر)' }).click();
+});`, 'Camp');
+    expect(result).toContain("getByRole('listbox').getByRole('option', { name: /ابتدایی/ })");
+  });
 });

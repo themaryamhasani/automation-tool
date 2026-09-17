@@ -14,6 +14,33 @@ function chromeOriginPattern(origin: string): string {
   return `${parsed.protocol}//${parsed.hostname}/*`;
 }
 
+function recordingHostPermissions(env: Record<string, string>, apiOrigin: string): string[] {
+  const patterns = new Set<string>([
+    chromeOriginPattern(apiOrigin),
+    'http://localhost/*',
+    'http://127.0.0.1/*',
+    'https://*.m.edus.ir/*',
+    'https://*.edus.ir/*',
+    'https://*.medu.ir/*',
+    'https://adib.m.edus.ir/*',
+    'https://soha.m.edus.ir/*',
+    'https://soha.medu.ir/*',
+    'https://www.soha.medu.ir/*',
+  ]);
+  const extras = [
+    ...(env.RUNTIME_DEFAULT_ORIGINS || '').split(','),
+    env.CAMP_LIVE_ORIGIN || '',
+  ].map(item => item.trim()).filter(Boolean);
+  for (const origin of extras) {
+    try {
+      patterns.add(chromeOriginPattern(origin));
+    } catch {
+      /* ignore */
+    }
+  }
+  return [...patterns];
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, resolve(__dirname, '../..'), '');
   const apiOrigin = exactOrigin(process.env.AUTOMATION_TOOL_API_ORIGIN || env.AUTOMATION_TOOL_API_ORIGIN, 'http://localhost:4280');
@@ -26,7 +53,10 @@ export default defineConfig(({ mode }) => {
       const path = resolve(__dirname, 'dist/manifest.json');
       const manifest = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
       manifest.version = pkg.version;
-      manifest.host_permissions = [chromeOriginPattern(apiOrigin)];
+      const permissions = Array.isArray(manifest.permissions) ? [...manifest.permissions as string[]] : [];
+      if (!permissions.includes('cookies')) permissions.push('cookies');
+      manifest.permissions = permissions;
+      manifest.host_permissions = recordingHostPermissions(env, apiOrigin);
       manifest.externally_connectable = { matches: [chromeOriginPattern(webOrigin)] };
       writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
     },

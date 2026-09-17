@@ -41,8 +41,8 @@ function extractErrorPath(detail = {}, out = '') {
 
 function solutionHint({ toolKind, error, title, path: errorPath, outcome } = {}) {
   if (outcome === 'skipped') {
-    if (/storageState|PREREG_COOKIE|E2E_STORAGE|لاگین|auth/i.test(`${error || ''} ${title || ''}`)) {
-      return 'فایل احراز هویت Playwright را بسازید (`scripts/e2e/.auth` یا `E2E_STORAGE_STATE` / `PREREG_COOKIE`) و دوباره setup را اجرا کنید.';
+    if (/storageState|PREREG_COOKIE|E2E_STORAGE|لاگین|auth|soha|نشست ورود/i.test(`${error || ''} ${title || ''}`)) {
+      return 'نشست Save & Run ناقص است. روی adib لاگین کامل (با soha) بمانید، افزونه را Reload کنید، و دوباره Run بزنید تا کوکی SSO هم ارسال شود.';
     }
     if (/INSTANCE_ID|G10_INSTANCE|MID_INSTANCE/i.test(`${error || ''} ${title || ''}`)) {
       return 'شناسه instance را در `.env` پک تنظیم کنید (`E2E_G10_INSTANCE_ID` / `E2E_MID_INSTANCE_ID`)؛ بدون آن TC مربوطه SKIP می‌شود.';
@@ -65,6 +65,9 @@ function solutionHint({ toolKind, error, title, path: errorPath, outcome } = {})
   }
   if (/ECONNREFUSED|net::ERR_CONNECTION_REFUSED|connect ECONNREFUSED/i.test(text)) {
     return 'سرویس هدف بالا نیست. URL پایه (`E2E_BASE_URL` / gateway / MF) و سلامت پورت را چک کنید؛ بعد دوباره ران بگیرید.';
+  }
+  if (/Timeout|exceeded|waiting for|پیدا نشد/i.test(text) && /getByRole\(['"]option['"]|listbox|گزینه .* پیدا نشد|لیست گزینه‌ها/i.test(text)) {
+    return 'گزینه در Autocomplete/لیست وابسته پیدا نشد. Save & Run حالا با تایپ فیلتر می‌کند؛ اگر باز هم فقط گزینهٔ دیگری دیدید، پیش‌نیازهای فرم (نوع مدرسه/جنسیت/تعداد) را در ضبط درست کنید یا گزینهٔ فعلیِ همان محیط را انتخاب کنید.';
   }
   if (/Timeout|exceeded|waiting for/i.test(text) && /locator|getBy|selector|visible/i.test(text)) {
     return 'سلکتور/متن UI پیدا نشد یا دیر لود شد. مسیر فایل تست را باز کنید، loading را صبر کنید، و با storageState معتبر صفحهٔ واقعی را ببینید.';

@@ -15,6 +15,8 @@ const {
   ToolOptionsError,
   snapshotWithToolOptions,
 } = require('../../../../shared/tool-options.cjs');
+const { normalizeBrowserStorageState } = require('../../../../shared/runtime/browser-storage-state.cjs');
+const { encryptBrowserStorageState } = require('../../../../shared/runtime/session-store.cjs');
 const TRACE_MODES = new Set(['off', 'on', 'retain-on-failure', 'on-first-retry']);
 const REPORTERS = new Set(['html', 'json', 'junit']);
 const BROWSERS = new Set(['chromium', 'firefox', 'webkit']);
@@ -156,6 +158,25 @@ async function createPersistedFileRun(pool, user, project, body) {
     },
     playwright: { browsers, headed: Boolean(body?.headed), workers, retries, maxFailures, trace, reporter, timeoutSeconds },
   };
+  let toolOptions = {};
+  if (body?.browserStorageState != null) {
+    try {
+      const storageState = normalizeBrowserStorageState(body.browserStorageState);
+      toolOptions = {
+        hasBrowserStorageState: true,
+        browserStorageCookieCount: storageState.cookies.length,
+        browserStorageCookieDomains: [...new Set(storageState.cookies.map(item => item.domain))].slice(0, 20),
+        browserStorageCookieNames: storageState.cookies.map(item => item.name).slice(0, 40),
+        encryptedBrowserStorageState: encryptBrowserStorageState(storageState),
+      };
+    } catch (error) {
+      throw new RunCreateError(
+        error.code || 'INVALID_BROWSER_STORAGE_STATE',
+        error.message || 'نشست مرورگر نامعتبر است.',
+        422,
+      );
+    }
+  }
   const useSnapshot = Boolean(cdeContext.projectKey && cdeContext.connected);
   const client = await pool.connect();
   let result;
@@ -194,6 +215,7 @@ async function createPersistedFileRun(pool, user, project, body) {
         trace,
         reporter,
         timeout_seconds: timeoutSeconds,
+        tool_options: toolOptions,
       },
       source: {
         source_snapshot: file.rows[0].source_code,

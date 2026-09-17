@@ -1,4 +1,5 @@
 import type { SessionState } from '../messaging/contracts';
+import type { BrowserStorageState } from '../messaging/contracts';
 
 export interface BrowserAutomationAdapter {
   connect(tabId?: number): Promise<SessionState>;
@@ -11,5 +12,6 @@ export interface BrowserAutomationAdapter {
   cancelElementSelection(): Promise<SessionState>;
   runLocally(source: string, trace?: boolean): Promise<SessionState>;
   stopLocalRun(): Promise<SessionState>;
+  exportStorageState(): Promise<{ state: SessionState; storageState: BrowserStorageState }>;
   getStatus(): SessionState;
 }

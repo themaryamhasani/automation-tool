@@ -39,6 +39,15 @@ test('solutionHint covers dual playwright and empty dashboard races', () => {
   assert.match(empty, /auth setup|waitAppIdle|loading/i);
 });
 
+test('solutionHint explains empty option lists from mid-form recordings', () => {
+  const hint = solutionHint({
+    toolKind: 'PLAYWRIGHT',
+    outcome: 'unexpected',
+    error: "locator.click: Test timeout of 15000ms exceeded.\nCall log:\n  - waiting for getByRole('listbox').getByRole('option', { name: /ابتدایی/ })",
+  });
+  assert.match(hint, /فرم خالی|از ابتدا/);
+});
+
 test('parseSummary enriches FAIL details with path and hint', () => {
   const out = `
   x   3 [chromium] › specs\\g10-eligibility-gate.spec.ts:74:3 › G10 eligibility gate UI › gated (5.7s)

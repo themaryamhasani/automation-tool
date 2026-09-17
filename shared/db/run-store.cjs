@@ -194,7 +194,7 @@ async function completeRun(db, runId, {
 }) {
   await db.query(
     `UPDATE runs SET
-        status=$1, total_tests=$2, passed_tests=$3, failed_tests=$4, skipped_tests=$5,
+        status=$1::varchar, total_tests=$2, passed_tests=$3, failed_tests=$4, skipped_tests=$5,
         completed_at=now(), duration_ms=$6, last_heartbeat_at=now(), updated_at=now(),
         report_paths=coalesce($7::jsonb, report_paths)
      WHERE id=$8`,

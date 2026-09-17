@@ -14,6 +14,7 @@ async function openPanel(windowId?: number): Promise<void> {
 async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
   try {
     let state;
+    let storageState;
     switch (request.type) {
       case 'GET_STATE': state = service.getStatus(); break;
       case 'ATTACH': state = await service.connect(request.tabId); break;
@@ -27,6 +28,12 @@ async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
       case 'REPLAY': state = await service.runLocally(request.source, request.trace); break;
       case 'STOP_REPLAY': state = await service.stopLocalRun(); break;
       case 'RESET_SESSION': state = await service.disconnect(); break;
+      case 'EXPORT_STORAGE_STATE': {
+        const exported = await service.exportStorageState();
+        state = exported.state;
+        storageState = exported.storageState;
+        break;
+      }
       case 'UPDATE_RECORDER_SETTINGS':
         state = service.getStatus();
         if (state.attachedTabId != null) {
@@ -35,7 +42,7 @@ async function handle(request: BackgroundRequest): Promise<BackgroundResponse> {
         }
         break;
     }
-    return { ok: true, state };
+    return storageState ? { ok: true, state, storageState } : { ok: true, state };
   } catch (error) {
     return { ok: false, state: service.getStatus(), error: serializeError(error) };
   }

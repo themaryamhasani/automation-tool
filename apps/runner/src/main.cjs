@@ -2,13 +2,17 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
 const JSZip = require('jszip');
 const { decryptText } = require('../../../shared/snapshot-crypto.cjs');
 const { excerptLogs, notifyRun } = require('../../../shared/log-excerpt.cjs');
+const { assessBrowserSession, sessionAssessmentError } = require('../../../shared/runtime/browser-session-assess.cjs');
 const { executeNonCdeRun } = require('./tools.cjs');
 const { writeLocalTaxonomy } = require('./local-reports.cjs');
 const { enrichSummary } = require('./report-findings.cjs');
-const { spawnLogged, sanitizeEnv, chromePath, prepareIsPlaywrightRuntime } = require('./process.cjs');
+const { spawnLogged, sanitizeEnv, chromePath, prepareIsPlaywrightRuntime, persistedPlaywrightJob } = require('./process.cjs');
+const { preparePlaywrightEnv } = require('./playwright-env.cjs');
+const { decryptBrowserStorageState } = require('../../../shared/runtime/session-store.cjs');
 const { listPacks } = require('../../api/src/approaches/is/packs.cjs');
 const { packPaths } = require('../../api/src/approaches/is/service.cjs');
 const { createPool } = require('../../../shared/db/search-path.cjs');
@@ -19,7 +23,6 @@ const { dispatchRunCompleted } = require('../../../shared/automation-dispatch.cj
 const { resolveSecretReferences: resolveSharedSecrets } = require('../../../shared/secrets-resolve.cjs');
 const { backend: objectStorageBackend } = require('../../../shared/object-storage.cjs');
 const { refreshFlakyStats } = require('../../../shared/flaky-stats.cjs');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
 
 // Touch maturity helpers so phase contracts stay wired.
 void resolveSharedSecrets;
@@ -63,6 +66,7 @@ const concurrency = Math.max(1, Math.min(8, Number(process.env.RUNNER_CONCURRENC
 const projectRoot = path.resolve(__dirname, '..', '..', '..');
 const artifactRoot = path.resolve(projectRoot, process.env.ARTIFACT_ROOT || 'artifacts/playwright');
 const workRoot = path.resolve(projectRoot, process.env.RUN_WORK_ROOT || 'runtime/runs');
+const { hardenRecordedSource } = require('../../../shared/playwright/harden-recorded-source.cjs');
 const playwrightCli = require.resolve('@playwright/test/cli');
 const chromiumExecutable = process.env.CHROMIUM_EXECUTABLE_PATH || chromePath();
 let stopping = false;
@@ -70,6 +74,50 @@ let active = 0;
 
 function safeName(value) {
   return String(value || 'test.spec.js').replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 180);
+}
+
+function materializeBrowserStorageState(run, workspace) {
+  const options = run.tool_options || {};
+  const encrypted = options.encryptedBrowserStorageState;
+  if (!encrypted) {
+    if (options.hasBrowserStorageState) {
+      throw new Error('نشست مرورگر برای این اجرا علامت‌گذاری شده بود ولی دادهٔ رمزنگاری‌شده موجود نیست. دوباره از Recorder روی Run بزنید.');
+    }
+    return null;
+  }
+  try {
+    const storageState = decryptBrowserStorageState(encrypted);
+    if (!storageState?.cookies?.length) {
+      throw new Error('نشست مرورگر بعد از رمزگشایی کوکی معتبری نداشت. روی صفحهٔ لاگین‌شده بمانید و دوباره Run بزنید.');
+    }
+    const pageUrl = String(run.source_snapshot || '').match(/https?:\/\/[^\s"'`]+/i)?.[0]
+      || String(run.base_url || 'https://adib.m.edus.ir/');
+    const assessment = assessBrowserSession(storageState, pageUrl);
+    if (!assessment.ok) {
+      throw new Error(sessionAssessmentError(assessment));
+    }
+    const dest = path.join(workspace, 'parent-storage-state.json');
+    fsSync.mkdirSync(workspace, { recursive: true });
+    fsSync.writeFileSync(dest, `${JSON.stringify({
+      cookies: storageState.cookies,
+      origins: Array.isArray(storageState.origins) ? storageState.origins : [],
+    }, null, 2)}\n`, 'utf8');
+    return dest;
+  } catch (error) {
+    if (String(error.message || '').includes('نشست مرورگر')) throw error;
+    throw new Error(
+      `رمزگشایی نشست مرورگر ناموفق بود (${error.message}). API و Runner باید یک کلید رمزنگاری مشترک داشته باشند؛ بعد از ری‌استارت، دوباره از Recorder روی Run بزنید.`,
+    );
+  }
+}
+
+async function clearEncryptedBrowserStorageState(runId) {
+  await pool.query(
+    `UPDATE run_requests
+        SET tool_options = (COALESCE(tool_options, '{}'::jsonb) - 'encryptedBrowserStorageState')
+      WHERE run_id = $1`,
+    [runId],
+  ).catch(() => undefined);
 }
 
 function sha256(value) { return crypto.createHash('sha256').update(String(value)).digest('hex'); }
@@ -96,7 +144,11 @@ async function materializeSnapshot(run, workspace) {
   const tests = path.join(workspace, 'tests');
   await fs.mkdir(tests, { recursive: true });
   const testName = safeName(path.basename(run.test_file_path || 'test.spec.js'));
-  await fs.writeFile(path.join(tests, testName), run.source_snapshot || '', 'utf8');
+  await fs.writeFile(
+    path.join(tests, testName),
+    hardenRecordedSource(run.source_snapshot || '', { withOptionHelper: true }),
+    'utf8',
+  );
   return { ...result, testFile: testName };
 }
 
@@ -254,6 +306,34 @@ async function registerArtifact(runId, kind, filePath, fileName, mimeType) {
   );
 }
 
+async function registerFailureEvidence(runId, resultsDir, outputDir) {
+  if (!resultsDir || !fsSync.existsSync(resultsDir)) return [];
+  const registered = [];
+  const walk = async (dir) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      const lower = entry.name.toLowerCase();
+      const isShot = /^test-failed.*\.png$/i.test(entry.name) || lower.endsWith('-failed.png');
+      const isContext = lower === 'error-context.md';
+      if (!isShot && !isContext) continue;
+      const destName = `${registered.length + 1}-${entry.name}`.replace(/[^a-zA-Z0-9._-]+/g, '-');
+      const dest = path.join(outputDir, destName);
+      await fs.copyFile(full, dest);
+      const kind = isShot ? 'SCREENSHOT' : 'EVIDENCE';
+      const mime = isShot ? 'image/png' : 'text/markdown; charset=utf-8';
+      await registerArtifact(runId, kind, dest, destName, mime);
+      registered.push({ kind, fileName: destName, path: dest });
+    }
+  };
+  await walk(resultsDir);
+  return registered;
+}
+
 const LOG_RAM_CAP = 2 * 1024 * 1024;
 
 function createLogSink(runId, logFile) {
@@ -388,10 +468,41 @@ async function executeRun(run) {
     triggerSource: run.trigger_source,
   }, null, 2), 'utf8');
   await registerArtifact(run.id, hasCdeSnapshot ? 'CDE_SNAPSHOT' : 'TEST_SOURCE', manifestPath, manifestName, 'application/json');
-  const configPath = path.join(workspace, 'playwright.config.cjs');
-  await fs.writeFile(configPath, configSource(run, reportPaths), 'utf8');
-  const testFile = path.join('tests', snapshot.testFile || safeName(path.basename(run.test_file_path || 'test.spec.js')));
-  const args = [playwrightCli, 'test', '--config', configPath, testFile];
+  const specFileName = snapshot.testFile || safeName(path.basename(run.test_file_path || 'test.spec.js'));
+  let args;
+  let spawnCwd = workspace;
+  let envExtra = {};
+  if (persistedPlaywrightFile) {
+    const job = persistedPlaywrightJob({
+      workspace,
+      testsDir: tests,
+      specFileName,
+      baseURL: run.base_url || '',
+      headed: Boolean(run.headed),
+      jsonFile: reportPaths.json,
+      runnerRoot: projectRoot,
+      timeoutSeconds: run.timeout_seconds,
+    });
+    args = job.args;
+    spawnCwd = job.cwd;
+    envExtra = job.envExtra;
+    const storagePath = materializeBrowserStorageState(run, workspace);
+    if (storagePath) {
+      Object.assign(envExtra, preparePlaywrightEnv({
+        ...envExtra,
+        E2E_STORAGE_STATE: storagePath,
+        E2E_STORAGE_STATE_PARENT: storagePath,
+        E2E_BASE_URL: run.base_url || '',
+      }, { searchDirs: [workspace], workspace }));
+    }
+  } else {
+    const configPath = path.join(workspace, 'playwright.config.cjs');
+    await fs.writeFile(configPath, configSource(run, reportPaths), 'utf8');
+    // Playwright CLI file args are treated as RegExp. On Windows, path.join backslashes
+    // turn `\r` in `tests\recorded-…` into a carriage-return class and match nothing.
+    const testFile = path.posix.join('tests', specFileName);
+    args = [playwrightCli, 'test', '--config', configPath, testFile];
+  }
   await pool.query('UPDATE runs SET command=$1 WHERE id=$2', [JSON.stringify([process.execPath, ...args]), run.id]);
   await notifyRun(pool, run.id);
 
@@ -415,10 +526,11 @@ async function executeRun(run) {
 
   try {
     const result = await spawnLogged(process.execPath, args, {
-      cwd: workspace,
+      cwd: spawnCwd,
       signal: controller.signal,
       env: sanitizeEnv({
         ...process.env,
+        ...envExtra,
         ...(await resolveSharedSecrets(run.secret_references || {})),
         FORCE_COLOR: '0',
         CI: '1',
@@ -467,6 +579,11 @@ async function executeRun(run) {
   if (fsSync.existsSync(results)) {
     const evidence = path.join(output, 'test-evidence.zip');
     if (await zipDirectory(results, evidence)) await registerArtifact(run.id, 'EVIDENCE', evidence, 'test-evidence.zip', 'application/zip');
+    if (exitCode !== 0 && !cancelled) {
+      await registerFailureEvidence(run.id, results, output).catch((error) => {
+        console.error(JSON.stringify({ event: 'failure-evidence-register-failed', runId: run.id, message: error.message }));
+      });
+    }
   }
 
   const duration = Date.now() - started;
@@ -497,6 +614,7 @@ async function executeRun(run) {
     durationMs: duration,
     reportPaths: { product: saved.product, board: saved.board },
   });
+  await clearEncryptedBrowserStorageState(run.id);
   await notifyRun(pool, run.id);
   await dispatchRunCompleted(pool, run.id).catch((error) => {
     console.error(JSON.stringify({ event: 'dispatch-failed', runId: run.id, message: error.message }));
@@ -516,11 +634,30 @@ async function failRun(run, error) {
     [run.id],
   ).catch(dbError => console.error(dbError));
   await setRunLogs(pool, run.id, excerptLogs(message), { touchHeartbeat: false }).catch(dbError => console.error(dbError));
+  await clearEncryptedBrowserStorageState(run.id);
   await notifyRun(pool, run.id);
+}
+
+async function expireStaleRunningRuns() {
+  const expired = await pool.query(
+    `UPDATE runs SET status='ERROR', completed_at=COALESCE(completed_at, now()), updated_at=now()
+      WHERE status='RUNNING' AND last_heartbeat_at < now() - interval '3 minutes'
+      RETURNING id`,
+  );
+  for (const row of expired.rows) {
+    await appendRunLogs(pool, row.id, '\nRunner heartbeat expired.').catch(() => undefined);
+    await notifyRun(pool, row.id).catch(() => undefined);
+    console.log(JSON.stringify({ event: 'run-heartbeat-expired', runId: row.id }));
+  }
+  return expired.rowCount || 0;
 }
 
 async function tick() {
   if (stopping) return;
+  await expireStaleRunningRuns().catch(error => console.error(JSON.stringify({
+    event: 'expire-stale-failed',
+    message: error instanceof Error ? error.message : String(error),
+  })));
   while (active < concurrency) {
     const run = await claimRun();
     if (!run) break;
@@ -549,14 +686,7 @@ async function start() {
       JSON.stringify({ pid: process.pid, objectStorage: objectStorageBackend() }),
     ],
   );
-  const expired = await pool.query(
-    `UPDATE runs SET status='ERROR', completed_at=now(), updated_at=now()
-      WHERE status='RUNNING' AND last_heartbeat_at < now() - interval '3 minutes'
-      RETURNING id`,
-  );
-  for (const row of expired.rows) {
-    await appendRunLogs(pool, row.id, '\nRunner heartbeat expired.').catch(() => undefined);
-  }
+  await expireStaleRunningRuns();
   console.log(JSON.stringify({ event: 'runner-ready', runnerId, concurrency, pollMs }));
   await tick();
   const timer = setInterval(() => {

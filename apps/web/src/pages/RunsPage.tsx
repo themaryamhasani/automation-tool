@@ -91,7 +91,11 @@ export function RunsPage() {
     const timer = window.setTimeout(() => { setPage(1); void loadRuns(); }, 350);
     return () => window.clearTimeout(timer);
   }, [search]);
-  useRunPoll(detail && ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(detail.status) ? detail : null, run => setDetail(run));
+  const onLiveDetail = useCallback((run: Run) => { setDetail(run); }, []);
+  useRunPoll(
+    detail && ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(detail.status) ? detail : null,
+    onLiveDetail,
+  );
   useEffect(() => {
     if (!detail?.id || ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(detail.status)) {
       setPreviousRun(null);
@@ -114,18 +118,34 @@ export function RunsPage() {
       });
     return () => { cancelled = true; };
   }, [detail?.id, detail?.status, detail?.completedAt]);
+  const liveListKey = useMemo(
+    () => (data?.data || [])
+      .filter(run => ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(run.status))
+      .map(run => run.id)
+      .join(','),
+    [data?.data],
+  );
   useEffect(() => {
-    const live = data?.data.find(run => ['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(run.status));
-    if (!live) return undefined;
-    const source = new EventSource(runEventsUrl(live.id), { withCredentials: true });
-    source.onmessage = () => { void loadRuns(true); };
-    const onVis = () => { if (document.visibilityState === 'visible') void loadRuns(true); };
+    const liveId = liveListKey.split(',').filter(Boolean)[0];
+    if (!liveId) return undefined;
+    let refreshTimer: number | null = null;
+    const refreshList = () => {
+      if (refreshTimer != null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void loadRuns(true);
+      }, 400);
+    };
+    const source = new EventSource(runEventsUrl(liveId), { withCredentials: true });
+    source.onmessage = () => { refreshList(); };
+    const onVis = () => { if (document.visibilityState === 'visible') refreshList(); };
     document.addEventListener('visibilitychange', onVis);
     return () => {
       source.close();
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [data?.data.map(run => `${run.id}:${run.status}`).join(','), loadRuns]);
+  }, [liveListKey, loadRuns]);
 
   const stats = useMemo(() => ({
     total: data?.total || 0,
@@ -170,7 +190,9 @@ export function RunsPage() {
               <td className="px-4 py-3"><p className="font-medium text-gray-800">{run.projectName}</p><p className="mt-1 text-xs text-gray-500">{run.toolKind || 'PLAYWRIGHT'} · {run.environmentName}{run.packId ? ` · ${run.packId}` : ''}{run.flowId ? `/${run.flowId}` : ''}</p></td>
               <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{run.browserProjects.map(browser => <Badge key={browser} tone="blue">{browserLabels[browser]}</Badge>)}</div></td>
               <td className="px-4 py-3"><Badge tone={statusTones[run.status]}>{statusLabels[run.status]}</Badge></td>
-              <td className="px-4 py-3"><span className="text-emerald-600">{(run.passedTests ?? 0).toLocaleString('fa-IR')}</span><span className="mx-1 text-gray-300">/</span><span className="text-red-600">{(run.failedTests ?? 0).toLocaleString('fa-IR')}</span><p className="mt-1 text-[11px] text-gray-400">از {(run.totalTests ?? 0).toLocaleString('fa-IR')} تست</p></td>
+              <td className="px-4 py-3">{['PREPARING', 'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'].includes(run.status)
+                ? <p className="text-xs text-gray-400">نتیجه بعد از اتمام</p>
+                : <><span className="text-emerald-600">{(run.passedTests ?? 0).toLocaleString('fa-IR')}</span><span className="mx-1 text-gray-300">/</span><span className="text-red-600">{(run.failedTests ?? 0).toLocaleString('fa-IR')}</span><p className="mt-1 text-[11px] text-gray-400">از {(run.totalTests ?? 0).toLocaleString('fa-IR')} تست</p></>}</td>
               <td className="px-4 py-3"><p className="text-xs text-gray-600">{formatDate(run.requestedAt)}</p><p className="mt-1 text-xs text-gray-400">{formatDuration(run.durationMs)}</p></td>
               <td className="px-4 py-3"><div className="flex gap-1"><Button size="sm" variant="ghost" icon={<Eye className="h-4 w-4" />} onClick={() => setDetail(run)}>جزئیات</Button>{canWrite && ['PREPARING', 'QUEUED', 'RUNNING'].includes(run.status) && <Button size="sm" variant="danger" loading={actionLoading} icon={<Square className="h-3.5 w-3.5" />} onClick={() => void cancel(run)}>لغو</Button>}</div></td>
             </tr>)}</tbody></table>

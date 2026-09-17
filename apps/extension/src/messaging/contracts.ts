@@ -36,11 +36,29 @@ export type BackgroundRequest =
   | { type: 'REPLAY'; source: string; trace: boolean }
   | { type: 'STOP_REPLAY' }
   | { type: 'RESET_SESSION' }
+  | { type: 'EXPORT_STORAGE_STATE' }
   | { type: 'UPDATE_RECORDER_SETTINGS'; testIdAttribute: string; slowMo: number };
 
 export type BackgroundResponse =
-  | { ok: true; state: SessionState }
+  | { ok: true; state: SessionState; storageState?: BrowserStorageState }
   | { ok: false; state: SessionState; error: SerializedExtensionError };
+
+export interface BrowserStorageState {
+  cookies: Array<{
+    name: string;
+    value: string;
+    domain: string;
+    path?: string;
+    expires?: number;
+    httpOnly?: boolean;
+    secure?: boolean;
+    sameSite?: string;
+  }>;
+  origins?: Array<{
+    origin: string;
+    localStorage: Array<{ name: string; value: string }>;
+  }>;
+}
 
 export interface StateChangedMessage {
   type: 'STATE_CHANGED';

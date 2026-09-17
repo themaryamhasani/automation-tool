@@ -26,9 +26,9 @@ The activity list describes clicks, navigation, input, and checks in everyday la
 ## Test and save
 
 - **Test locally** runs in your current Chrome session and can see its existing login state.
-- **Save** stores or updates the test in Automation Tool.
-- **Save & Run** stores the test and runs it in Automation Tool's separate, isolated browser environment.
+- **Save** stores or updates the test in Automation Tool (source only; cookies are not saved into the test file).
+- **Save & Run** stores the test, captures the **current tab's login cookies** (Playwright `storageState`), encrypts them for that run only, queues the run, and opens the run page.
 
-If a flow began while you were already signed in, include login steps or ask an administrator to configure test credentials before Save & Run. Your personal Chrome cookies are never uploaded.
+Stay signed in on the target site when you click **Run**. Local Test reuses your Chrome tab; server runs need the captured session. Cookies are encrypted at rest, used once by the runner, then cleared from the run record. They are never written into the saved `.spec` source.
 
-Technical source, locator, trace, destination, and troubleshooting controls are available under **Advanced** when needed.
+Technical destination, environment, locator, and troubleshooting controls are available under the **Settings** and **Locator** tabs. Activity appears under **Log**.
