@@ -12,7 +12,7 @@
   "dependencies": {
     "@axe-core/playwright": "^4.10.2",
     "@biomejs/biome": "1.9.4",
-    "@playwright/test": "1.55.1",
+    "@playwright/test": "1.62.1",
     "@stoplight/spectral-cli": "^6.15.0",
     "dotenv": "^17.2.1",
     "jszip": "^3.10.1",
